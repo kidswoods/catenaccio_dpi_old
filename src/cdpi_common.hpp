@@ -4,7 +4,7 @@
 #include <stdint.h>
 
 struct flow_id {
-    uint16_t l3_proto;
+    uint8_t l3_proto;
 
     union {
         uint32_t b32;

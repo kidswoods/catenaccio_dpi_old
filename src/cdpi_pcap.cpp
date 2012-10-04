@@ -4,8 +4,11 @@
 #include "ip.h"
 
 #include <pcap.h>
+#include <string.h>
 
 #include <arpa/inet.h>
+
+#include <netinet/ip6.h>
 
 #include <iostream>
 
@@ -22,8 +25,8 @@ pcap_callback(uint8_t *user, const struct pcap_pkthdr *h, const uint8_t *bytes)
 void
 cdpi_pcap::callback(const struct pcap_pkthdr *h, const uint8_t *bytes)
 {
-    flow_id  id;
-    L3_proto proto;
+    flow_id id;
+    uint8_t proto;
     const uint8_t *ip_hdr = get_ip_hdr(bytes, h->caplen, proto);
 
     if (ip_hdr == NULL)
@@ -77,31 +80,60 @@ cdpi_pcap::run()
 }
 
 bool
-cdpi_pcap::get_flow_id(const uint8_t *ip_hdr, L3_proto proto, flow_id &id)
+cdpi_pcap::get_flow_id(const uint8_t *ip_hdr, uint8_t proto, flow_id &id)
 {
+    char src[512], dst[512];
+
+    memset(&id, 0, sizeof(id));
+
     switch (proto) {
-    case IPv4: {
+    case IPPROTO_IP: {
         const ip *hdr = (const ip*)ip_hdr;
 
         if (hdr->ip_v != 4)
             return false;
 
-        cout << "IPv4: src = "
-             << (int)((const uint8_t*)&hdr->ip_src.s_addr)[0] << "."
-             << (int)((const uint8_t*)&hdr->ip_src.s_addr)[1] << "."
-             << (int)((const uint8_t*)&hdr->ip_src.s_addr)[2] << "."
-             << (int)((const uint8_t*)&hdr->ip_src.s_addr)[3] << "."
-             << ", dst = "
-             << (int)((const uint8_t*)&hdr->ip_dst.s_addr)[0] << "."
-             << (int)((const uint8_t*)&hdr->ip_dst.s_addr)[1] << "."
-             << (int)((const uint8_t*)&hdr->ip_dst.s_addr)[2] << "."
-             << (int)((const uint8_t*)&hdr->ip_dst.s_addr)[3] << "."
-             << endl;
+        id.l3_proto   = IPPROTO_IP;
+        id.l3_src.b32 = hdr->ip_src.s_addr;
+        id.l3_dst.b32 = hdr->ip_dst.s_addr;
+
+        inet_ntop(PF_INET, &hdr->ip_src, src, sizeof(src));
+        inet_ntop(PF_INET, &hdr->ip_dst, dst, sizeof(dst));
+
+        cout << "IPv4: src = " << src << ", dst = " << dst << endl;
+
+        switch (hdr->ip_p) {
+        case IPPROTO_TCP:
+            id.l4_proto = IPPROTO_TCP;
+            break;
+        case IPPROTO_UDP:
+            id.l4_proto = IPPROTO_UDP;
+            break;
+        default:
+            return true;
+        }
+
+        // TODO: read port numbers
 
         break;
     }
-    case IPv6: {
-        const ip *hdr = (const ip*)ip_hdr;
+    case IPPROTO_IPV6: {
+        const ip6_hdr *hdr = (const ip6_hdr*)ip_hdr;
+
+        if ((hdr->ip6_vfc & IPV6_VERSION_MASK) != IPV6_VERSION)
+            return false;
+
+        id.l3_proto = IPPROTO_IPV6;
+        memcpy(id.l3_src.b128, &hdr->ip6_src, sizeof(id.l3_src.b128));
+        memcpy(id.l3_dst.b128, &hdr->ip6_dst, sizeof(id.l3_dst.b128));
+
+        inet_ntop(PF_INET6, &hdr->ip6_src, src, sizeof(src));
+        inet_ntop(PF_INET6, &hdr->ip6_dst, dst, sizeof(dst));
+
+        cout << "IPv6: src = " << src << ", dst = " << dst << endl;
+
+        // TODO: handle extended header
+
         break;
     }
     }
@@ -110,7 +142,7 @@ cdpi_pcap::get_flow_id(const uint8_t *ip_hdr, L3_proto proto, flow_id &id)
 }
 
 const uint8_t *
-cdpi_pcap::get_ip_hdr(const uint8_t *bytes, uint32_t len, L3_proto &proto)
+cdpi_pcap::get_ip_hdr(const uint8_t *bytes, uint32_t len, uint8_t &proto)
 {
     const uint8_t *ip_hdr = NULL;
 
@@ -124,11 +156,11 @@ cdpi_pcap::get_ip_hdr(const uint8_t *bytes, uint32_t len, L3_proto &proto)
 
         switch (ntohs(ehdr->ether_type)) {
         case ETHERTYPE_IP:
-            proto = IPv4;
+            proto  = IPPROTO_IP;
             ip_hdr = bytes + sizeof(ether_header);
             break;
         case ETHERTYPE_IPV6:
-            proto = IPv6;
+            proto  = IPPROTO_IPV6;
             ip_hdr = bytes + sizeof(ether_header);
             break;
         default:

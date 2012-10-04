@@ -16,17 +16,12 @@ public:
     void callback(const struct pcap_pkthdr *h, const uint8_t *bytes);
 
 private:
-    enum L3_proto {
-        IPv4,
-        IPv6
-    };
-
     std::string m_dev;
     int m_dl_type;
 
-    bool get_flow_id(const uint8_t *ip_hdr, L3_proto proto, flow_id &id);
+    bool get_flow_id(const uint8_t *ip_hdr, uint8_t proto, flow_id &id);
     const uint8_t *get_ip_hdr(const uint8_t *bytes, uint32_t len,
-                              L3_proto &proto);
+                              uint8_t &proto);
 };
 
 #endif // CDPI_PCAP_HPP
