@@ -58,12 +58,12 @@ cdpi_pcap::run()
 
     handle = pcap_open_live(m_dev.c_str(), 1518, 1, 1000, errbuf);
 
-    m_dl_type = pcap_datalink(handle);
-
     if (handle == NULL) {
         cerr << "Couldn't open device " << m_dev << ": " << errbuf << endl;
         return;
     }
+
+    m_dl_type = pcap_datalink(handle);
 
     switch (pcap_loop(handle, -1, pcap_callback, (u_char*)this)) {
     case 0:
