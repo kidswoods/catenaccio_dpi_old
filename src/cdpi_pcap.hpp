@@ -24,7 +24,7 @@ private:
     std::string m_dev;
     int m_dl_type;
 
-    void get_flow_id(const uint8_t *ip_hdr, L3_proto proto, flow_id &id);
+    bool get_flow_id(const uint8_t *ip_hdr, L3_proto proto, flow_id &id);
     const uint8_t *get_ip_hdr(const uint8_t *bytes, uint32_t len,
                               L3_proto &proto);
 };

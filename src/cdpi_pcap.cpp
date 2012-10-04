@@ -76,12 +76,28 @@ cdpi_pcap::run()
     }
 }
 
-void
+bool
 cdpi_pcap::get_flow_id(const uint8_t *ip_hdr, L3_proto proto, flow_id &id)
 {
     switch (proto) {
     case IPv4: {
         const ip *hdr = (const ip*)ip_hdr;
+
+        if (hdr->ip_v != 4)
+            return false;
+
+        cout << "IPv4: src = "
+             << (int)((const uint8_t*)&hdr->ip_src.s_addr)[0] << "."
+             << (int)((const uint8_t*)&hdr->ip_src.s_addr)[1] << "."
+             << (int)((const uint8_t*)&hdr->ip_src.s_addr)[2] << "."
+             << (int)((const uint8_t*)&hdr->ip_src.s_addr)[3] << "."
+             << ", dst = "
+             << (int)((const uint8_t*)&hdr->ip_dst.s_addr)[0] << "."
+             << (int)((const uint8_t*)&hdr->ip_dst.s_addr)[1] << "."
+             << (int)((const uint8_t*)&hdr->ip_dst.s_addr)[2] << "."
+             << (int)((const uint8_t*)&hdr->ip_dst.s_addr)[3] << "."
+             << endl;
+
         break;
     }
     case IPv6: {
@@ -89,6 +105,8 @@ cdpi_pcap::get_flow_id(const uint8_t *ip_hdr, L3_proto proto, flow_id &id)
         break;
     }
     }
+
+    return true;
 }
 
 const uint8_t *
