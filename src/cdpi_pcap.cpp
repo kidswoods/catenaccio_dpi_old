@@ -12,10 +12,10 @@
 
 #include <iostream>
 
-#ifdef LINUX
+#ifdef __linux__
 #define IPV6_VERSION      0x60
 #define IPV6_VERSION_MASK 0xf0
-#endif
+#endif // LINUX
 
 using namespace std;
 

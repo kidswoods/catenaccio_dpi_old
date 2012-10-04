@@ -21,4 +21,4 @@ struct flow_id {
     uint16_t l4_port_dst;
 };
 
-#endif CDPI_COMMON_HPP
+#endif // CDPI_COMMON_HPP
