@@ -1,15 +1,24 @@
-#include "cdpi_pcap.hpp"
+#include "cdpi_divert.hpp"
+
+#include <iostream>
+
+using namespace std;
 
 int
 main(int argc, char *argv[])
 {
-    cdpi_pcap pcap;
+    event_base *ev_base = event_base_new();
+    cdpi_divert dvt;
 
-    if (argc > 1) {
-        pcap.set_dev(argv[1]);
+    if (!ev_base) {
+        cerr << "could'n new event_base" << endl;
+        return -1;
     }
 
-    pcap.run();
+    dvt.set_ev_base(ev_base);
+    dvt.run(100, 200);
+
+    event_base_dispatch(ev_base);
 
     return 0;
 }

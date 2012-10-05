@@ -85,7 +85,7 @@ cdpi_pcap::run()
 }
 
 bool
-cdpi_pcap::get_flow_id(const uint8_t *ip_hdr, uint8_t proto, flow_id &id)
+cdpi_pcap::get_flow_id(const uint8_t *bytes, uint8_t proto, flow_id &id)
 {
     char src[512], dst[512];
 
@@ -93,7 +93,7 @@ cdpi_pcap::get_flow_id(const uint8_t *ip_hdr, uint8_t proto, flow_id &id)
 
     switch (proto) {
     case IPPROTO_IP: {
-        const ip *hdr = (const ip*)ip_hdr;
+        const ip *hdr = (const ip*)bytes;
 
         if (hdr->ip_v != 4)
             return false;
@@ -118,17 +118,24 @@ cdpi_pcap::get_flow_id(const uint8_t *ip_hdr, uint8_t proto, flow_id &id)
             return true;
         }
 
+        uint16_t offset = ntohs(hdr->ip_off & IP_OFFMASK);
+        if (offset != 0 || hdr->ip_off & IP_MF) {
+            // TODO: handle fragments
+            return false;
+        }
+
         // TODO: read port numbers
 
         break;
     }
     case IPPROTO_IPV6: {
-        const ip6_hdr *hdr = (const ip6_hdr*)ip_hdr;
+        const ip6_hdr *hdr = (const ip6_hdr*)bytes;
 
         if ((hdr->ip6_vfc & IPV6_VERSION_MASK) != IPV6_VERSION)
             return false;
 
         id.l3_proto = IPPROTO_IPV6;
+        id.ip6_flow = hdr->ip6_flow;
         memcpy(id.l3_src.b128, &hdr->ip6_src, sizeof(id.l3_src.b128));
         memcpy(id.l3_dst.b128, &hdr->ip6_dst, sizeof(id.l3_dst.b128));
 
@@ -137,7 +144,45 @@ cdpi_pcap::get_flow_id(const uint8_t *ip_hdr, uint8_t proto, flow_id &id)
 
         cout << "IPv6: src = " << src << ", dst = " << dst << endl;
 
-        // TODO: handle extended header
+
+        uint8_t next = hdr->ip6_nxt;
+
+        bytes += sizeof(ip6_hdr);
+
+        for (;;) {
+            switch (next) {
+            case IPPROTO_HOPOPTS:
+            case IPPROTO_ROUTING:
+            case IPPROTO_DSTOPTS:
+            case IPPROTO_AH: {
+                ip6_ext *ext = (ip6_ext*)bytes;
+
+                next = ext->ip6e_nxt;
+
+                bytes += ext->ip6e_len * 8;
+
+                break;
+            }
+            default:
+                goto endfor;
+            }
+        }
+        endfor:
+
+        switch (next) {
+        case IPPROTO_TCP:
+            id.l4_proto = IPPROTO_TCP;
+            break;
+        case IPPROTO_UDP:
+            id.l4_proto = IPPROTO_UDP;
+            break;
+        case IPPROTO_FRAGMENT:
+            // TODO: handle fragments
+            return false;
+        default:
+            id.l4_proto = next;
+            break;
+        }
 
         break;
     }
