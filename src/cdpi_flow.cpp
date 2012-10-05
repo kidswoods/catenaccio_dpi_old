@@ -5,8 +5,8 @@
 #include <netinet/ip.h>
 
 bool
-get_flow_id(uint8_t **bytes, ssize_t len, cdpi_flow_id &flow_id,
-            cdpi_data_orig &origin)
+get_flow_id_ipv4(uint8_t **bytes, size_t len, cdpi_flow_id &flow_id,
+                 cdpi_data_origin &origin)
 {
     cdpi_flow_edge addr1, addr2;
     ip *hdr = (ip*)*bytes;

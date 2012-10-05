@@ -1,6 +1,7 @@
 #ifndef CDPI_FLOW_HPP
 #define CDPI_FLOW_HPP
 
+#include <stdio.h>
 #include <stdint.h>
 
 struct cdpi_flow_edge {
@@ -26,12 +27,13 @@ struct cdpi_flow_id {
 #define l4_port1 addr1.l4_port
 #define l4_port2 addr2.l4_port
 
-enum cdpi_data_orig {
+enum cdpi_data_origin {
     FROM_ADDR1,
     FROM_ADDR2
 };
 
-bool get_flow_id_ipv4(uint8_t *bytes, cdpi_flow_id &flow_id);
+bool get_flow_id_ipv4(uint8_t **bytes, size_t len, cdpi_flow_id &flow_id,
+                      cdpi_data_origin &origin);
 
 class cdpi_flow {
 };

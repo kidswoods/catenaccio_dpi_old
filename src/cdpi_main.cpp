@@ -1,8 +1,23 @@
+#include "cdpi_common.hpp"
 #include "cdpi_divert.hpp"
+#include "cdpi_flow.hpp"
 
 #include <iostream>
 
 using namespace std;
+
+class cb_ipv4 : public cdpi_callback {
+public:
+    cb_ipv4() { }
+    virtual ~cb_ipv4() { }
+
+    virtual void operator()(uint8_t *bytes, size_t len) {
+        cdpi_flow_id     id;
+        cdpi_data_origin org;
+
+        get_flow_id_ipv4(&bytes, len, id, org);
+    }
+};
 
 int
 main(int argc, char *argv[])
@@ -16,6 +31,7 @@ main(int argc, char *argv[])
     }
 
     dvt.set_ev_base(ev_base);
+    dvt.set_callback_ipv4(boost::shared_ptr<cdpi_callback>(new cb_ipv4));
     dvt.run(100, 200);
 
     event_base_dispatch(ev_base);
