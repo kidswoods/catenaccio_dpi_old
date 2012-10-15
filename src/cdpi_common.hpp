@@ -4,16 +4,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
-#include <boost/shared_ptr.hpp>
+#include <boost/shared_array.hpp>
 
-class cdpi_callback {
-public:
-    cdpi_callback() { }
-    virtual ~cdpi_callback() { }
-
-    virtual void operator()(uint8_t *bytes, size_t len) = 0;
-};
-
-typedef boost::shared_ptr<cdpi_callback> cdpi_callback_ptr;
+typedef boost::shared_array<uint8_t> ptr_uint8_t;
 
 #endif // CDPI_COMMON_HPP

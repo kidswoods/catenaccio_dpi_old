@@ -11,11 +11,10 @@ public:
     cb_ipv4() { }
     virtual ~cb_ipv4() { }
 
-    virtual void operator()(uint8_t *bytes, size_t len) {
-        cdpi_flow_id     id;
-        cdpi_data_origin org;
+    cdpi_flow m_flow;
 
-        get_flow_id_ipv4(&bytes, len, id, org);
+    virtual void operator()(uint8_t *bytes, size_t len) {
+        m_flow.input_ipv4(bytes, len);
     }
 };
 

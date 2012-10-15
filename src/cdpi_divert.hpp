@@ -8,6 +8,17 @@
 
 #include <event.h>
 
+class cdpi_callback {
+public:
+    cdpi_callback() { }
+    virtual ~cdpi_callback() { }
+
+    virtual void operator()(uint8_t *bytes, size_t len) = 0;
+};
+
+typedef boost::shared_ptr<cdpi_callback> cdpi_callback_ptr;
+
+
 class cdpi_divert {
 public:
     cdpi_divert() {}
