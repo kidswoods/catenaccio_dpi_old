@@ -91,6 +91,10 @@ cdpi_flow::input_ipv4(uint8_t *bytes, size_t len)
 
     if (get_flow_id_ipv4(bytes, len, *id.m_id, origin, &l4hdr)) {
         // TODO:
+        if (id.m_id->l4_proto == IPPROTO_TCP) {
+            input_tcp(bytes, len, (tcphdr*)l4hdr, id, origin);
+        } else if (id.m_id->l4_proto == IPPROTO_UDP) {
+        }
     }
 }
 
@@ -98,10 +102,11 @@ void
 cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
                      cdpi_flow_id_wrapper id, cdpi_data_origin origin)
 {
-    map<cdpi_flow_id_wrapper, tcp_flow>::iterator it;
-    ptr_uint8_t data(new uint8_t[len]);
-    uint32_t    seq = ntohl(tcph->th_seq);
-    uint32_t    ack = ntohl(tcph->th_ack);
+    map<cdpi_flow_id_wrapper, ptr_tcp_flow>::iterator it;
+    tcp_flow_unidir *flow_uni;
+    ptr_uint8_t      data(new uint8_t[len]);
+    uint32_t         seq = ntohl(tcph->th_seq);
+    uint32_t         ack = ntohl(tcph->th_ack);
 
     // TODO: checksum
 
@@ -109,13 +114,12 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
 
     it = m_tcp_flow.find(id);
     if (it == m_tcp_flow.end()) {
-        tcp_flow_unidir *flow_uni;
-        tcp_flow         flow;
+        ptr_tcp_flow p_flow(new tcp_flow);
 
         if (origin == FROM_ADDR1)
-            flow_uni = &flow.m_flow1;
+            flow_uni = &p_flow->m_flow1;
         else
-            flow_uni = &flow.m_flow2;
+            flow_uni = &p_flow->m_flow2;
 
         flow_uni->m_packets[seq] = data;
         flow_uni->m_flags        = tcph->th_flags;
@@ -123,11 +127,41 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
         flow_uni->m_ack          = ack;
         flow_uni->m_min_seq      = seq;
         flow_uni->m_time         = time(NULL);
+        flow_uni->m_num++;
 
-        m_tcp_flow[id] = flow;
+        m_tcp_flow[id] = p_flow;
 
         return;
     } else {
-        
+        if (origin == FROM_ADDR1)
+            flow_uni = &it->second->m_flow1;
+        else
+            flow_uni = &it->second->m_flow2;
+
+        if (flow_uni->m_time == 0) {
+            flow_uni->m_packets[seq] = data;
+            flow_uni->m_flags        = tcph->th_flags;
+            flow_uni->m_seq          = seq;
+            flow_uni->m_ack          = ack;
+            flow_uni->m_min_seq      = seq;
+            flow_uni->m_time         = time(NULL);
+            flow_uni->m_num++;
+
+            return;
+        }
+
+        if ((seq & 0xFFFF0000 == 0 &&
+             flow_uni->m_seq & 0xFFFF0000 == 0xFFFF0000) ||
+            seq > flow_uni->m_seq) {
+            flow_uni->m_seq  = seq;
+            flow_uni->m_ack  = ack;
+        }
+
+        if (flow_uni->m_packets.find(seq) == flow_uni->m_packets.end())
+            flow_uni->m_packets[seq] = data;
+        else
+            flow_uni->m_dup_num++;
+
+        flow_uni->m_time = time(NULL);
     }
 }

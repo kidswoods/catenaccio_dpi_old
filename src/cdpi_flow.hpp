@@ -57,35 +57,29 @@ enum cdpi_data_origin {
     FROM_ADDR2
 };
 
-struct tcp_flow_unidir {
+class tcp_flow_unidir {
+public:
     std::map<uint32_t, ptr_uint8_t> m_packets;
     uint8_t  m_flags;
     uint32_t m_seq;
     uint32_t m_ack;
     uint32_t m_min_seq;
     time_t   m_time;
+    uint64_t m_chksum_err;
+    uint64_t m_dup_num;
+    uint64_t m_num;
+
+    tcp_flow_unidir() : m_flags(0), m_seq(0), m_ack(0), m_min_seq(0),
+                        m_time(0), m_chksum_err(0), m_dup_num(0), m_num(0) { }
+    virtual ~tcp_flow_unidir() { }
 };
 
-class tcp_flow {
-public:
+struct tcp_flow {
     tcp_flow_unidir m_flow1;
     tcp_flow_unidir m_flow2;
-    uint64_t m_flow1_chksum_err;
-    uint64_t m_flow2_chksum_err;
-    uint64_t m_flow1_dup_num;
-    uint64_t m_flow2_dup_num;
-    uint64_t m_flow1_num;
-    uint64_t m_flow2_num;
-
-    tcp_flow() : m_flow1_chksum_err(0),
-                 m_flow2_chksum_err(0),
-                 m_flow1_dup_num(0),
-                 m_flow2_dup_num(0),
-                 m_flow1_num(0),
-                 m_flow2_num(0) { }
-    virtual ~tcp_flow() { }
-
 };
+
+typedef boost::shared_ptr<tcp_flow> ptr_tcp_flow;
 
 class udp_flow {
 public:
@@ -118,7 +112,7 @@ private:
     void input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
                    cdpi_flow_id_wrapper id, cdpi_data_origin origin);
 
-    std::map<cdpi_flow_id_wrapper, tcp_flow> m_tcp_flow;
+    std::map<cdpi_flow_id_wrapper, ptr_tcp_flow> m_tcp_flow;
     std::map<cdpi_flow_id_wrapper, udp_flow> m_udp_flow;
 
 };
