@@ -2,9 +2,16 @@
 
 #include <string.h>
 
+#include <boost/bind.hpp>
+
 const uint32_t MAX_WINDOW_SIZE = 65535;
 
 using namespace std;
+
+cdpi_flow::cdpi_flow() : m_thread(boost::bind(&cdpi_flow::run, this))
+{
+
+}
 
 bool
 cdpi_flow::get_flow_id_ipv4(uint8_t *bytes, size_t len, cdpi_flow_id &flow_id,
@@ -90,10 +97,10 @@ cdpi_flow::input_ipv4(uint8_t *bytes, size_t len)
     uint8_t *l4hdr;
 
     if (get_flow_id_ipv4(bytes, len, *id.m_id, origin, &l4hdr)) {
-        // TODO:
         if (id.m_id->l4_proto == IPPROTO_TCP) {
             input_tcp(bytes, len, (tcphdr*)l4hdr, id, origin);
         } else if (id.m_id->l4_proto == IPPROTO_UDP) {
+            // TODO: UDP
         }
     }
 }
@@ -107,10 +114,19 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
     ptr_uint8_t      data(new uint8_t[len]);
     uint32_t         seq = ntohl(tcph->th_seq);
     uint32_t         ack = ntohl(tcph->th_ack);
+    ip              *iph = (ip*)bytes;
+    int              data_len;
 
     // TODO: checksum
 
     memcpy(data.get(), bytes, len);
+
+    boost::mutex::scoped_lock lock(m_mutex);
+
+    data_len = (int)len - (int)iph->ip_hl * 4 - (int)tcph->th_off * 4;
+
+    if (data_len < 0)
+        return;
 
     it = m_tcp_flow.find(id);
     if (it == m_tcp_flow.end()) {
@@ -121,17 +137,30 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
         else
             flow_uni = &p_flow->m_flow2;
 
-        flow_uni->m_packets[seq] = data;
-        flow_uni->m_flags        = tcph->th_flags;
-        flow_uni->m_seq          = seq;
-        flow_uni->m_ack          = ack;
-        flow_uni->m_min_seq      = seq;
-        flow_uni->m_time         = time(NULL);
+        if (tcph->th_flags & TH_SYN) {
+            flow_uni->m_seq = seq;
+
+            if (data_len != 0) {
+                flow_uni->m_packets[seq] = data;
+                flow_uni->m_min_seq = seq;
+            }
+        }
+
+        if (tcph->th_flags & TH_ACK)
+            flow_uni->m_ack = ack;
+
+        if (tcph->th_flags & TH_FIN)
+            flow_uni->m_is_fin = true;
+
+        if (tcph->th_flags & TH_RST)
+            flow_uni->m_is_rst = true;
+
+
+        flow_uni->m_flags   = tcph->th_flags;
+        flow_uni->m_time    = time(NULL);
         flow_uni->m_num++;
 
         m_tcp_flow[id] = p_flow;
-
-        return;
     } else {
         if (origin == FROM_ADDR1)
             flow_uni = &it->second->m_flow1;
@@ -139,29 +168,89 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
             flow_uni = &it->second->m_flow2;
 
         if (flow_uni->m_time == 0) {
-            flow_uni->m_packets[seq] = data;
-            flow_uni->m_flags        = tcph->th_flags;
-            flow_uni->m_seq          = seq;
-            flow_uni->m_ack          = ack;
-            flow_uni->m_min_seq      = seq;
-            flow_uni->m_time         = time(NULL);
-            flow_uni->m_num++;
+            if (tcph->th_flags & TH_SYN) {
+                flow_uni->m_seq = seq;
 
-            return;
+                if (data_len != 0) {
+                    flow_uni->m_packets[seq] = data;
+                    flow_uni->m_min_seq = seq;
+                }
+            }
+
+            if (tcph->th_flags & TH_ACK)
+                flow_uni->m_ack = ack;
+        } else {
+            if (tcph->th_flags & TH_SYN) {
+                if ((seq & 0xFFFF0000 == 0 &&
+                     flow_uni->m_seq & 0xFFFF0000 == 0xFFFF0000) ||
+                    seq > flow_uni->m_seq) {
+                    flow_uni->m_seq = seq;
+                }
+
+                if (data_len != 0) {
+                    if (flow_uni->m_packets.find(seq) ==
+                        flow_uni->m_packets.end()) {
+                        if (! flow_uni->m_is_gaveup) {
+                            if (flow_uni->m_packets.size() == 0)
+                                flow_uni->m_min_seq = seq;
+
+                            flow_uni->m_packets[seq] = data;
+                        }
+                    } else {
+                        flow_uni->m_dup_num++;
+                    }
+                }
+            }
+
+            if (tcph->th_flags & TH_ACK &&
+                ((ack & 0xFFFF0000 == 0 &&
+                  flow_uni->m_ack & 0xFFFF0000 == 0xFFFF0000) ||
+                 ack > flow_uni->m_ack)) {
+                flow_uni->m_ack = ack;
+            }
         }
 
-        if ((seq & 0xFFFF0000 == 0 &&
-             flow_uni->m_seq & 0xFFFF0000 == 0xFFFF0000) ||
-            seq > flow_uni->m_seq) {
-            flow_uni->m_seq  = seq;
-            flow_uni->m_ack  = ack;
-        }
+        if (tcph->th_flags & TH_FIN)
+            flow_uni->m_is_fin = true;
 
-        if (flow_uni->m_packets.find(seq) == flow_uni->m_packets.end())
-            flow_uni->m_packets[seq] = data;
-        else
-            flow_uni->m_dup_num++;
+        if (tcph->th_flags & TH_RST)
+            flow_uni->m_is_rst = true;
 
-        flow_uni->m_time = time(NULL);
+        flow_uni->m_flags = tcph->th_flags;
+        flow_uni->m_time  = time(NULL);
+        flow_uni->m_num++;
     }
+
+    m_inq.insert(id);
+    m_condition.notify_one();
+}
+
+void
+cdpi_flow::run()
+{
+    for (;;) {
+        list<ptr_uint8_t>    packets;
+        cdpi_flow_id_wrapper id;
+
+        {
+            boost::mutex::scoped_lock lock(m_mutex);
+
+            while (m_inq.size() == 0) {
+                m_condition.wait(lock);
+            }
+
+            id = *m_inq.begin();
+            m_inq.erase(id);
+
+            // TODO: consume
+        }
+
+        input_tcp_l7(id, packets);
+    }
+}
+
+void
+cdpi_flow::input_tcp_l7(cdpi_flow_id_wrapper id, list<ptr_uint8_t> &packets)
+{
+
 }

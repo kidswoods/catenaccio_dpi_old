@@ -11,8 +11,11 @@
 
 #include <list>
 #include <map>
+#include <set>
 
 #include <boost/shared_ptr.hpp>
+#include <boost/thread.hpp>
+#include <boost/thread/condition.hpp>
 
 struct cdpi_flow_edge {
     union {
@@ -68,9 +71,13 @@ public:
     uint64_t m_chksum_err;
     uint64_t m_dup_num;
     uint64_t m_num;
+    bool     m_is_gaveup;
+    bool     m_is_rst;
+    bool     m_is_fin;
 
     tcp_flow_unidir() : m_flags(0), m_seq(0), m_ack(0), m_min_seq(0),
-                        m_time(0), m_chksum_err(0), m_dup_num(0), m_num(0) { }
+                        m_time(0), m_chksum_err(0), m_dup_num(0), m_num(0),
+                        m_is_gaveup(false), m_is_rst(false), m_is_fin(false) { }
     virtual ~tcp_flow_unidir() { }
 };
 
@@ -78,8 +85,6 @@ struct tcp_flow {
     tcp_flow_unidir m_flow1;
     tcp_flow_unidir m_flow2;
 };
-
-typedef boost::shared_ptr<tcp_flow> ptr_tcp_flow;
 
 class udp_flow {
 public:
@@ -98,12 +103,16 @@ public:
 
 };
 
+typedef boost::shared_ptr<tcp_flow> ptr_tcp_flow;
+typedef boost::shared_ptr<udp_flow> ptr_udp_flow;
+
 class cdpi_flow {
 public:
-    cdpi_flow() { }
+    cdpi_flow();
     virtual ~cdpi_flow() { }
 
     void input_ipv4(uint8_t *bytes, size_t len);
+    void run();
 
 private:
 
@@ -111,9 +120,14 @@ private:
                           cdpi_data_origin &origin, uint8_t **l4hdr);
     void input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
                    cdpi_flow_id_wrapper id, cdpi_data_origin origin);
+    void input_tcp_l7(cdpi_flow_id_wrapper id, std::list<ptr_uint8_t> &packets);
 
     std::map<cdpi_flow_id_wrapper, ptr_tcp_flow> m_tcp_flow;
-    std::map<cdpi_flow_id_wrapper, udp_flow> m_udp_flow;
+    std::map<cdpi_flow_id_wrapper, ptr_udp_flow> m_udp_flow;
+    std::set<cdpi_flow_id_wrapper> m_inq;
+    boost::thread    m_thread;
+    boost::mutex     m_mutex;
+    boost::condition m_condition;
 
 };
 
