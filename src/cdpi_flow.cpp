@@ -17,12 +17,12 @@ bool
 cdpi_flow::get_flow_id_ipv4(uint8_t *bytes, size_t len, cdpi_flow_id &flow_id,
                             cdpi_data_origin &origin, uint8_t **l4hdr)
 {
-    cdpi_flow_edge addr1, addr2;
+    cdpi_flow_peer addr1, addr2;
     ip     *hdr = (ip*)*bytes;
     tcphdr *tcph;
     udphdr *udph;
 
-    if (hdr->ip_v != 4)
+    if (hdr->ip_v != 4 || ntohs(hdr->ip_len) != len)
         return false;
 
     memset(&flow_id, 0, sizeof(flow_id));
@@ -221,7 +221,12 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
         flow_uni->m_num++;
     }
 
-    m_inq.insert(id);
+    id_dir q;
+
+    q.m_id  = id;
+    q.m_org = origin;
+
+    m_inq.insert(q);
     m_condition.notify_one();
 }
 
@@ -229,8 +234,8 @@ void
 cdpi_flow::run()
 {
     for (;;) {
-        list<ptr_uint8_t>    packets;
-        cdpi_flow_id_wrapper id;
+        set<id_dir> inq;
+        set<id_dir>::iterator it_inq;
 
         {
             boost::mutex::scoped_lock lock(m_mutex);
@@ -239,18 +244,73 @@ cdpi_flow::run()
                 m_condition.wait(lock);
             }
 
-            id = *m_inq.begin();
-            m_inq.erase(id);
+            // consume
+            for (it_inq = m_inq.begin(); it_inq != m_inq.end(); ++it_inq) {
+                uint8_t l4_proto = it_inq->m_id.m_id->l4_proto;
 
-            // TODO: consume
+                if (l4_proto == IPPROTO_TCP) {
+                    map<uint32_t, ptr_uint8_t>::iterator it_pkt;
+                    map<id_dir, pkt_buf>::iterator       it_m_pkt;
+                    tcp_flow_unidir *flow;
+
+                    if (it_inq->m_org == FROM_ADDR1)
+                        flow = &m_tcp_flow[it_inq->m_id]->m_flow1;
+                    else
+                        flow = &m_tcp_flow[it_inq->m_id]->m_flow2;
+
+                    it_m_pkt = m_packets.find(*it_inq);
+                    if (it_m_pkt == m_packets.end()) {
+                        m_packets[*it_inq].m_buf.clear();
+                        it_m_pkt = m_packets.find(*it_inq);
+                    }
+
+                    it_pkt = flow->m_packets.find(flow->m_min_seq);
+                    while (it_pkt != flow->m_packets.end()) {
+                        ip     *iph  = (ip*)it_pkt->second.get();
+                        tcphdr *tcph = (tcphdr*)((uint8_t*)iph +
+                                                 iph->ip_hl * 4);
+                        uint32_t seq = it_pkt->first;
+                        uint32_t len = ntohs(iph->ip_len) - iph->ip_hl * 4 -
+                                       tcph->th_off * 4;
+
+                        it_m_pkt->second.m_buf.push_back(it_pkt->second);
+                        flow->m_packets.erase(seq);
+
+                        seq += len;
+                        
+                        flow->m_min_seq = seq;
+
+                        it_pkt = flow->m_packets.find(seq);
+                    }
+
+                    if (flow->m_seq - flow->m_min_seq > 0x00020000) {
+                        flow->m_packets.clear();
+                        flow->m_is_gaveup = true;
+                    }
+
+                    inq.insert(*it_inq);
+                } else if (l4_proto == IPPROTO_UDP) {
+                    // TODO: UDP
+                }
+            }
+
+            m_inq.clear();
         }
 
-        input_tcp_l7(id, packets);
+        for (it_inq = inq.begin(); it_inq != inq.end(); ++it_inq) {
+            input_tcp_l7(inq);
+        }
     }
 }
 
 void
-cdpi_flow::input_tcp_l7(cdpi_flow_id_wrapper id, list<ptr_uint8_t> &packets)
+cdpi_flow::input_tcp_l7(set<id_dir> &inq)
 {
 
+}
+
+bool
+cdpi_flow::read_buf(id_dir &id, uint8_t *buf, int len)
+{
+    return 0;
 }

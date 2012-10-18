@@ -17,7 +17,7 @@
 #include <boost/thread.hpp>
 #include <boost/thread/condition.hpp>
 
-struct cdpi_flow_edge {
+struct cdpi_flow_peer {
     union {
         uint32_t b32;
         uint8_t  b128[16];
@@ -28,7 +28,7 @@ struct cdpi_flow_edge {
 
 struct cdpi_flow_id {
     // addr1 must be less than addr2
-    cdpi_flow_edge addr1, addr2;
+    cdpi_flow_peer addr1, addr2;
     uint8_t  l3_proto;
     uint8_t  l4_proto;
 };
@@ -106,6 +106,34 @@ public:
 typedef boost::shared_ptr<tcp_flow> ptr_tcp_flow;
 typedef boost::shared_ptr<udp_flow> ptr_udp_flow;
 
+class id_dir
+{
+public:
+    cdpi_flow_id_wrapper m_id;
+    cdpi_data_origin     m_org;
+
+    bool operator< (const id_dir &rhs) const {
+        if (m_id == rhs.m_id)
+            return m_org < rhs.m_org;
+
+        return m_id < rhs.m_id;
+    }
+
+    bool operator> (const id_dir &rhs) const { return rhs < *this; }
+    bool operator== (const id_dir &rhs) const {
+        return m_id == rhs.m_id && m_org == rhs.m_org;
+    }
+};
+
+class pkt_buf {
+public:
+    std::list<ptr_uint8_t> m_buf;
+    int m_pos;
+
+    pkt_buf() : m_pos(0) { }
+    virtual ~pkt_buf() { }
+};
+
 class cdpi_flow {
 public:
     cdpi_flow();
@@ -115,16 +143,19 @@ public:
     void run();
 
 private:
-
     bool get_flow_id_ipv4(uint8_t *bytes, size_t len, cdpi_flow_id &flow_id,
                           cdpi_data_origin &origin, uint8_t **l4hdr);
     void input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
                    cdpi_flow_id_wrapper id, cdpi_data_origin origin);
-    void input_tcp_l7(cdpi_flow_id_wrapper id, std::list<ptr_uint8_t> &packets);
+    void input_tcp_l7(std::set<id_dir> &inq);
+    bool read_buf(id_dir &id, uint8_t *buf, int len);
 
     std::map<cdpi_flow_id_wrapper, ptr_tcp_flow> m_tcp_flow;
     std::map<cdpi_flow_id_wrapper, ptr_udp_flow> m_udp_flow;
-    std::set<cdpi_flow_id_wrapper> m_inq;
+    std::set<id_dir> m_inq;
+
+    // for thread
+    std::map<id_dir, pkt_buf> m_packets;
     boost::thread    m_thread;
     boost::mutex     m_mutex;
     boost::condition m_condition;
