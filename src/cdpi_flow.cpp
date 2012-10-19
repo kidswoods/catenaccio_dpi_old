@@ -330,11 +330,88 @@ cdpi_flow::input_tcp_l7(set<id_dir> &inq)
 
     for (it_inq = inq.begin(); it_inq != inq.end(); ++it_inq) {
         m_packets.erase(*it_inq);
+        // TODO: analyze L7
+        //       remove connection when FIN or RST was recieved
     }
 }
 
-bool
+int
 cdpi_flow::read_buf(id_dir &id, uint8_t *buf, int len)
 {
-    return 0;
+    map<id_dir, pkt_buf>::iterator it_pkt;
+    list<ptr_uint8_t>::iterator    it_buf;
+    int pos;
+    int readlen = 0;
+
+    it_pkt = m_packets.find(id);
+    if (it_pkt == m_packets.end())
+        return 0;
+
+    pos = it_pkt->second.m_pos;
+
+    for (it_buf = it_pkt->second.m_buf.begin();
+         it_buf != it_pkt->second.m_buf.end(); ++it_buf) {
+        ip     *iph  = (ip*)it_buf->get();
+        tcphdr *tcph = (tcphdr*)(it_buf->get() + iph->ip_hl * 4);
+        int     datalen  = ntohs(iph->ip_len) - iph->ip_hl * 4 - tcph->th_off * 4;
+        int     reqlen   = len - readlen;
+        int     availlen = datalen - pos;
+        int     cpylen;
+
+        if (availlen <= reqlen) {
+            cpylen = availlen;
+        } else {
+            cpylen = reqlen;
+        }
+
+        memcpy(buf, it_buf->get() + iph->ip_hl * 4 + tcph->th_off * 4 + pos,
+               cpylen);
+
+        readlen += cpylen;
+
+        if (readlen == len)
+            break;
+
+        pos = 0;
+    }
+
+    return readlen;
+}
+
+int
+cdpi_flow::skip_buf(id_dir &id, int len)
+{
+    map<id_dir, pkt_buf>::iterator it_pkt;
+    list<ptr_uint8_t>::iterator    it_buf;
+    int readlen = 0;
+
+    it_pkt = m_packets.find(id);
+    if (it_pkt == m_packets.end())
+        return 0;
+
+    for (it_buf = it_pkt->second.m_buf.begin();
+         it_buf != it_pkt->second.m_buf.end();) {
+        ip     *iph  = (ip*)it_buf->get();
+        tcphdr *tcph = (tcphdr*)(it_buf->get() + iph->ip_hl * 4);
+        int     datalen  = ntohs(iph->ip_len) - iph->ip_hl * 4 - tcph->th_off * 4;
+        int     reqlen   = len - readlen;
+        int     availlen = datalen - it_pkt->second.m_pos;
+        int     cpylen;
+
+        if (availlen <= reqlen) {
+            cpylen = availlen;
+            it_pkt->second.m_pos = 0;
+            it_pkt->second.m_buf.erase(++it_buf);
+        } else {
+            cpylen = reqlen;
+            it_pkt->second.m_pos += reqlen;
+        }
+
+        readlen += cpylen;
+
+        if (readlen == len)
+            break;
+    }
+
+    return readlen;
 }

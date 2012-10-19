@@ -148,7 +148,8 @@ private:
     void input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
                    cdpi_flow_id_wrapper id, cdpi_data_origin origin);
     void input_tcp_l7(std::set<id_dir> &inq);
-    bool read_buf(id_dir &id, uint8_t *buf, int len);
+    int  read_buf(id_dir &id, uint8_t *buf, int len);
+    int  skip_buf(id_dir &id, int len);
 
     std::map<cdpi_flow_id_wrapper, ptr_tcp_flow> m_tcp_flow;
     std::map<cdpi_flow_id_wrapper, ptr_udp_flow> m_udp_flow;
