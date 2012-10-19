@@ -18,7 +18,7 @@ cdpi_flow::get_flow_id_ipv4(uint8_t *bytes, size_t len, cdpi_flow_id &flow_id,
                             cdpi_data_origin &origin, uint8_t **l4hdr)
 {
     cdpi_flow_peer addr1, addr2;
-    ip     *hdr = (ip*)*bytes;
+    ip     *hdr = (ip*)bytes;
     tcphdr *tcph;
     udphdr *udph;
 
@@ -125,6 +125,19 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
 
     data_len = (int)len - (int)iph->ip_hl * 4 - (int)tcph->th_off * 4;
 
+#ifdef DEBUG
+    cout << "flags = ";
+    if (tcph->th_flags & TH_SYN)
+        cout << "S";
+    if (tcph->th_flags & TH_ACK)
+        cout << "A";
+    if (tcph->th_flags & TH_FIN)
+        cout << "F";
+    if (tcph->th_flags & TH_RST)
+        cout << "R";
+    cout << endl;
+#endif // DEBUG
+
     if (data_len < 0)
         return;
 
@@ -137,12 +150,16 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
         else
             flow_uni = &p_flow->m_flow2;
 
-        if (tcph->th_flags & TH_SYN) {
-            flow_uni->m_seq = seq;
+        if (tcph->th_flags & TH_RST) {
+            flow_uni->m_is_rst = true;
+        } else {
+            if (data_len > 0) {
+                D((cout << "insert: seq = " << seq
+                   << ", len = " << data_len << endl));
 
-            if (data_len != 0) {
                 flow_uni->m_packets[seq] = data;
-                flow_uni->m_min_seq = seq;
+                flow_uni->m_seq          = seq;
+                flow_uni->m_min_seq      = seq;
             }
         }
 
@@ -152,12 +169,8 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
         if (tcph->th_flags & TH_FIN)
             flow_uni->m_is_fin = true;
 
-        if (tcph->th_flags & TH_RST)
-            flow_uni->m_is_rst = true;
-
-
-        flow_uni->m_flags   = tcph->th_flags;
-        flow_uni->m_time    = time(NULL);
+        flow_uni->m_flags = tcph->th_flags;
+        flow_uni->m_time  = time(NULL);
         flow_uni->m_num++;
 
         m_tcp_flow[id] = p_flow;
@@ -167,32 +180,38 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
         else
             flow_uni = &it->second->m_flow2;
 
-        if (flow_uni->m_time == 0) {
-            if (tcph->th_flags & TH_SYN) {
-                flow_uni->m_seq = seq;
-
-                if (data_len != 0) {
-                    flow_uni->m_packets[seq] = data;
-                    flow_uni->m_min_seq = seq;
-                }
-            }
-
-            if (tcph->th_flags & TH_ACK)
-                flow_uni->m_ack = ack;
+        if (tcph->th_flags & TH_RST) {
+            flow_uni->m_is_rst = true;
         } else {
-            if (tcph->th_flags & TH_SYN) {
-                if ((seq & 0xFFFF0000 == 0 &&
-                     flow_uni->m_seq & 0xFFFF0000 == 0xFFFF0000) ||
-                    seq > flow_uni->m_seq) {
-                    flow_uni->m_seq = seq;
+            if (flow_uni->m_time == 0) {
+                if (data_len > 0) {
+                    D((cout << "insert: seq = " << seq
+                       << ", len = " << data_len << endl));
+
+                    flow_uni->m_packets[seq] = data;
+                    flow_uni->m_seq          = seq;
+                    flow_uni->m_min_seq      = seq;
                 }
 
-                if (data_len != 0) {
+                if (tcph->th_flags & TH_ACK)
+                    flow_uni->m_ack = ack;
+            } else {
+                if (data_len > 0) {
+                    if ((seq & 0xFFFF0000 == 0 &&
+                         flow_uni->m_seq & 0xFFFF0000 == 0xFFFF0000) ||
+                        seq > flow_uni->m_seq) {
+                        flow_uni->m_seq = seq;
+                    }
+
                     if (flow_uni->m_packets.find(seq) ==
                         flow_uni->m_packets.end()) {
+
                         if (! flow_uni->m_is_gaveup) {
                             if (flow_uni->m_packets.size() == 0)
                                 flow_uni->m_min_seq = seq;
+
+                            D((cout << "insert: seq = " << seq
+                               << ", len = " << data_len << endl));
 
                             flow_uni->m_packets[seq] = data;
                         }
@@ -200,21 +219,18 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
                         flow_uni->m_dup_num++;
                     }
                 }
-            }
 
-            if (tcph->th_flags & TH_ACK &&
-                ((ack & 0xFFFF0000 == 0 &&
-                  flow_uni->m_ack & 0xFFFF0000 == 0xFFFF0000) ||
-                 ack > flow_uni->m_ack)) {
-                flow_uni->m_ack = ack;
+                if (tcph->th_flags & TH_ACK &&
+                    ((ack & 0xFFFF0000 == 0 &&
+                      flow_uni->m_ack & 0xFFFF0000 == 0xFFFF0000) ||
+                     ack > flow_uni->m_ack)) {
+                    flow_uni->m_ack = ack;
+                }
             }
         }
 
         if (tcph->th_flags & TH_FIN)
             flow_uni->m_is_fin = true;
-
-        if (tcph->th_flags & TH_RST)
-            flow_uni->m_is_rst = true;
 
         flow_uni->m_flags = tcph->th_flags;
         flow_uni->m_time  = time(NULL);
@@ -276,6 +292,8 @@ cdpi_flow::run()
                         it_m_pkt->second.m_buf.push_back(it_pkt->second);
                         flow->m_packets.erase(seq);
 
+                        D((cout << "consume: seq = " << seq << ", len = " << len << endl));
+
                         seq += len;
                         
                         flow->m_min_seq = seq;
@@ -283,7 +301,8 @@ cdpi_flow::run()
                         it_pkt = flow->m_packets.find(seq);
                     }
 
-                    if (flow->m_seq - flow->m_min_seq > 0x00020000) {
+                    if (flow->m_packets.size() > 0 &&
+                        flow->m_seq - flow->m_min_seq > 0x00020000) {
                         flow->m_packets.clear();
                         flow->m_is_gaveup = true;
                     }
@@ -298,7 +317,8 @@ cdpi_flow::run()
         }
 
         for (it_inq = inq.begin(); it_inq != inq.end(); ++it_inq) {
-            input_tcp_l7(inq);
+            if (it_inq->m_id.m_id->l4_proto == IPPROTO_TCP)
+                input_tcp_l7(inq);
         }
     }
 }
@@ -306,7 +326,11 @@ cdpi_flow::run()
 void
 cdpi_flow::input_tcp_l7(set<id_dir> &inq)
 {
+    set<id_dir>::iterator it_inq;
 
+    for (it_inq = inq.begin(); it_inq != inq.end(); ++it_inq) {
+        m_packets.erase(*it_inq);
+    }
 }
 
 bool

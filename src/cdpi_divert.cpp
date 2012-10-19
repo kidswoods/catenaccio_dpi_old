@@ -18,7 +18,6 @@ void callback_ipv4(evutil_socket_t fd, short what, void *arg)
 {
     cdpi_divert *dvt = (cdpi_divert*)arg;
     sockaddr_in  sin;
-    ip          *hdr;
     socklen_t    sin_len;
     ssize_t      size;
     uint8_t      buf[1024 * 100];
@@ -32,14 +31,17 @@ void callback_ipv4(evutil_socket_t fd, short what, void *arg)
         exit(-1);
     }
 
+#ifdef DEBUG
+    ip          *hdr;
     hdr = (ip*)buf;
 
     inet_ntop(PF_INET, &hdr->ip_src, src, sizeof(src));
     inet_ntop(PF_INET, &hdr->ip_dst, dst, sizeof(dst));
 
     cout << "recv IPv4: src = " << src << ", dst = " << dst << endl;
+#endif // DEBUG
 
-    if (dvt->m_callback_ipv4) 
+    if (dvt->m_callback_ipv4)
         (*dvt->m_callback_ipv4)(buf, size);
 
     sendto(fd, buf, size, 0, (sockaddr*)&sin, sin_len);

@@ -13,7 +13,7 @@ public:
 
     cdpi_flow m_flow;
 
-    virtual void operator()(uint8_t *bytes, size_t len) {
+    virtual void operator() (uint8_t *bytes, size_t len) {
         m_flow.input_ipv4(bytes, len);
     }
 };
