@@ -9,10 +9,13 @@
 
 const uint32_t MAX_WINDOW_SIZE = 65535;
 
+static const char *regex_http_req = "^[A-Z] .? HTTP/(1.0|1.1)\r\n([a-zA-Z][a-zA-Z-]?: .?\r\n)?";
+static const char *regex_http_res = "^HTTP/(1.0|1.1) [0-9]{3} .?\r\n([a-zA-Z-][a-zA-Z]?: .?\r\n)?";
+
 using namespace std;
 
-cdpi_flow::cdpi_flow() : m_regex_http_method("^[A-Z]? .? HTTP/(1.0|1.1)\r\n.*", boost::regex::perl | boost::regex::icase),
-                         m_regex_http_res("^HTTP/(1.0|1.1) [0-9]{3} .?\r\n.*", boost::regex::perl | boost::regex::icase),
+cdpi_flow::cdpi_flow() : m_regex_http_req(regex_http_req),
+                         m_regex_http_res(regex_http_res),
                          m_thread(boost::bind(&cdpi_flow::run, this))
 {
 
@@ -178,6 +181,8 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
         flow_uni->m_time  = time(NULL);
         flow_uni->m_num++;
 
+        // TODO: event, new flow
+
         m_tcp_flow[id] = p_flow;
     } else {
         if (origin == FROM_ADDR1)
@@ -312,6 +317,11 @@ cdpi_flow::run()
                         flow->m_is_gaveup = true;
                     }
 
+                    if (flow->m_proto)
+                        it_inq->m_type = flow->m_proto->m_type;
+                    else
+                        it_inq->m_type = PROTO_NONE;
+
                     inq.insert(*it_inq);
                 } else if (l4_proto == IPPROTO_UDP) {
                     // TODO: UDP
@@ -334,14 +344,114 @@ cdpi_flow::input_tcp_l7(set<id_dir> &inq)
     set<id_dir>::iterator it_inq;
 
     for (it_inq = inq.begin(); it_inq != inq.end(); ++it_inq) {
-        m_packets.erase(*it_inq);
+        if (it_inq->m_type == PROTO_NONE) {
+            if (is_http_client(*it_inq)) {
+                // TODO: event, detect http client
+                init_http_client(*it_inq);
+            } else if (is_http_server(*it_inq)) {
+                // TODO: event, detect http server
+                init_http_server(*it_inq);
+            } else {
+                map<id_dir, pkt_buf>::iterator it_pkt = m_packets.find(*it_inq);
+                if (it_pkt->second.m_buf.size() > 32) {
+                    m_packets.erase(*it_inq);
+
+                    boost::mutex::scoped_lock lock(m_mutex);
+                    tcp_flow_unidir *flow;
+
+                    if (it_inq->m_org == FROM_ADDR1)
+                        flow = &m_tcp_flow[it_inq->m_id]->m_flow1;
+                    else
+                        flow = &m_tcp_flow[it_inq->m_id]->m_flow2;
+
+                    flow->m_is_gaveup = true;
+                    flow->m_packets.clear();
+                }
+
+                goto skip_parse;
+            }
+        }
+
         // TODO: analyze L7
         //       remove connection when FIN or RST was recieved
+
+    skip_parse:
+        m_packets.erase(*it_inq);
+    }
+}
+
+void
+cdpi_flow::init_http_client(const id_dir &id)
+{
+    boost::mutex::scoped_lock lock(m_mutex);
+
+    map<cdpi_flow_id_wrapper, ptr_tcp_flow>::iterator it_tcp;
+    tcp_flow_unidir *flow;
+
+    it_tcp = m_tcp_flow.find(id.m_id);
+
+    if (id.m_org == FROM_ADDR1) {
+        flow = &it_tcp->second->m_flow1;
+    } else {
+        flow = &it_tcp->second->m_flow2;
+    }
+
+    flow->m_proto = boost::shared_ptr<cdpi_protocols>(new cdpi_http);
+    flow->m_proto->m_type = PROTO_HTTP_CLIENT;
+
+    cdpi_http *p_http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+    p_http->m_state = cdpi_http::HTTP_METHOD;
+}
+
+void
+cdpi_flow::init_http_server(const id_dir &id)
+{
+    boost::mutex::scoped_lock lock(m_mutex);
+
+    map<cdpi_flow_id_wrapper, ptr_tcp_flow>::iterator it_tcp;
+    tcp_flow_unidir *server, *client;
+
+    it_tcp = m_tcp_flow.find(id.m_id);
+
+    if (id.m_org == FROM_ADDR1) {
+        server = &it_tcp->second->m_flow1;
+        client = &it_tcp->second->m_flow2;
+    } else {
+        server = &it_tcp->second->m_flow2;
+        client = &it_tcp->second->m_flow1;
+    }
+
+    server->m_proto = boost::shared_ptr<cdpi_protocols>(new cdpi_http);
+    server->m_proto->m_type = PROTO_HTTP_SERVER;
+
+    cdpi_http *p_http = dynamic_cast<cdpi_http*>(server->m_proto.get());
+    p_http->m_state = cdpi_http::HTTP_RESPONSE;
+
+    if (! client->m_proto || client->m_proto->m_type != PROTO_HTTP_CLIENT) {
+        cdpi_flow_peer *peer_src, *peer_dst;
+        char addr_src[32], addr_dst[32];
+
+        if (id.m_org == FROM_ADDR1) {
+            peer_src = &id.m_id.m_id->addr1;
+            peer_dst = &id.m_id.m_id->addr2;
+        } else {
+            peer_src = &id.m_id.m_id->addr2;
+            peer_dst = &id.m_id.m_id->addr1;
+        }
+
+        inet_ntop(id.m_id.m_id->l3_proto, &peer_src->l3_addr,
+                  addr_src, sizeof(addr_src));
+        inet_ntop(id.m_id.m_id->l3_proto, &peer_dst->l3_addr,
+                  addr_dst, sizeof(addr_dst));
+
+        cout << "warning: " << addr_src << ":" << ntohs(peer_src->l4_port)
+             << " is a http server, but the peer(" << addr_dst << ":"
+             << ntohs(peer_dst->l4_port) << ") isn't an HTTP client" << endl;
     }
 }
 
 bool
-cdpi_flow::is_http_client(id_dir &id)
+cdpi_flow::is_http_client(const id_dir &id)
 {
     map<id_dir, pkt_buf>::iterator it = m_packets.find(id);
     ip     *iph  = (ip*)it->second.m_buf.begin()->get();
@@ -350,72 +460,12 @@ cdpi_flow::is_http_client(id_dir &id)
     int     len  = iph->ip_len - hlen;
     string  data((char*)iph + hlen, (char*)iph + hlen + len);
 
-    if (boost::regex_match(data, m_regex_http_method)) {
-        boost::mutex::scoped_lock lock(m_mutex);
-
-        map<cdpi_flow_id_wrapper, ptr_tcp_flow>::iterator it_tcp;
-        tcp_flow_unidir *flow;
-
-        it_tcp = m_tcp_flow.find(id.m_id);
-
-        if (id.m_org == FROM_ADDR1) {
-            flow = &it_tcp->second->m_flow1;
-        } else {
-            flow = &it_tcp->second->m_flow2;
-        }
-
-        flow->m_proto = boost::shared_ptr<cdpi_protocols>(new cdpi_http);
-        flow->m_proto->m_type = PROTO_HTTP_CLIENT;
-
-        cdpi_http *p_http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
-        p_http->m_state = cdpi_http::HTTP_METHOD;
-
-        return true;
-    }
-
-    return false;
+    return boost::regex_match(data, m_regex_http_req);
 }
 
 bool
-cdpi_flow::is_http_server(id_dir &id)
+cdpi_flow::is_http_server(const id_dir &id)
 {
-    {
-        boost::mutex::scoped_lock lock(m_mutex);
-
-        tcp_flow_unidir *src, *dst;
-        map<cdpi_flow_id_wrapper, ptr_tcp_flow>::iterator it_tcp;
-
-        it_tcp = m_tcp_flow.find(id.m_id);
-
-        if (id.m_org == FROM_ADDR1) {
-            src = &it_tcp->second->m_flow1;
-            dst = &it_tcp->second->m_flow2;
-        } else {
-            src = &it_tcp->second->m_flow2;
-            dst = &it_tcp->second->m_flow1;
-        }
-
-        if (! dst->m_proto || dst->m_proto->m_type != PROTO_HTTP_CLIENT) {
-            cdpi_flow_peer *peer_src, *peer_dst;
-            char addr_src[32], addr_dst[32];
-
-            if (id.m_org == FROM_ADDR1) {
-                peer_src = &id.m_id.m_id->addr1;
-                peer_dst = &id.m_id.m_id->addr2;
-            } else {
-                peer_src = &id.m_id.m_id->addr2;
-                peer_dst = &id.m_id.m_id->addr1;
-            }
-
-            inet_ntop(id.m_id.m_id->l3_proto, &peer_src->l3_addr,
-                      addr_src, sizeof(addr_src));
-            inet_ntop(id.m_id.m_id->l3_proto, &peer_dst->l3_addr,
-                      addr_dst, sizeof(addr_dst));
-
-            cout << "warning: the peer isn't an HTTP client" << endl;
-        }
-    }
-
     map<id_dir, pkt_buf>::iterator it = m_packets.find(id);
     ip     *iph  = (ip*)it->second.m_buf.begin()->get();
     tcphdr *tcph = (tcphdr*)((uint8_t*)iph + iph->ip_hl * 4);
@@ -423,30 +473,7 @@ cdpi_flow::is_http_server(id_dir &id)
     int     len  = iph->ip_len - hlen;
     string  data((char*)iph + hlen, (char*)iph + hlen + len);
 
-    if (boost::regex_match(data, m_regex_http_method)) {
-        boost::mutex::scoped_lock lock(m_mutex);
-
-        map<cdpi_flow_id_wrapper, ptr_tcp_flow>::iterator it_tcp;
-        tcp_flow_unidir *flow;
-
-        it_tcp = m_tcp_flow.find(id.m_id);
-
-        if (id.m_org == FROM_ADDR1) {
-            flow = &it_tcp->second->m_flow1;
-        } else {
-            flow = &it_tcp->second->m_flow2;
-        }
-
-        flow->m_proto = boost::shared_ptr<cdpi_protocols>(new cdpi_http);
-        flow->m_proto->m_type = PROTO_HTTP_SERVER;
-        
-        cdpi_http *p_http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
-        p_http->m_state = cdpi_http::HTTP_RESPONSE;
-
-        return true;
-    }
-
-    return false;
+    return boost::regex_match(data, m_regex_http_req);
 }
 
 bool
@@ -457,7 +484,7 @@ cdpi_flow::is_tls_1_0(id_dir &id)
 }
 
 int
-cdpi_flow::read_buf(id_dir &id, uint8_t *buf, int len)
+cdpi_flow::read_buf(const id_dir &id, uint8_t *buf, int len)
 {
     map<id_dir, pkt_buf>::iterator it_pkt;
     list<ptr_uint8_t>::iterator    it_buf;
@@ -500,7 +527,7 @@ cdpi_flow::read_buf(id_dir &id, uint8_t *buf, int len)
 }
 
 int
-cdpi_flow::skip_buf(id_dir &id, int len)
+cdpi_flow::skip_buf(const id_dir &id, int len)
 {
     map<id_dir, pkt_buf>::iterator it_pkt;
     list<ptr_uint8_t>::iterator    it_buf;

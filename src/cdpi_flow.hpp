@@ -64,8 +64,9 @@ enum cdpi_data_origin {
 
 class tcp_flow_unidir {
 public:
-    std::map<uint32_t, ptr_uint8_t> m_packets;
+    std::map<uint32_t, ptr_uint8_t>   m_packets;
     boost::shared_ptr<cdpi_protocols> m_proto;
+    boost::shared_ptr<cdpi_protocols> m_proto_proxy;
     uint8_t  m_flags;
     uint32_t m_seq;
     uint32_t m_ack;
@@ -114,6 +115,7 @@ class id_dir
 public:
     cdpi_flow_id_wrapper m_id;
     cdpi_data_origin     m_org;
+    mutable cdpi_proto_type m_type;
 
     bool operator< (const id_dir &rhs) const {
         if (m_id == rhs.m_id)
@@ -151,14 +153,17 @@ private:
     void input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
                    cdpi_flow_id_wrapper id, cdpi_data_origin origin);
     void input_tcp_l7(std::set<id_dir> &inq);
-    int  read_buf(id_dir &id, uint8_t *buf, int len);
-    int  skip_buf(id_dir &id, int len);
+    int  read_buf(const id_dir &id, uint8_t *buf, int len);
+    int  skip_buf(const id_dir &id, int len);
 
     // for http
-    boost::regex m_regex_http_method;
+    boost::regex m_regex_http_req;
     boost::regex m_regex_http_res;
-    bool is_http_client(id_dir &id);
-    bool is_http_server(id_dir &id);
+    bool is_http_client(const id_dir &id);
+    bool is_http_server(const id_dir &id);
+    void init_http_client(const id_dir &id);
+    void init_http_server(const id_dir &id);
+
 
     // for TLS 1.0
     bool is_tls_1_0(id_dir &id);
