@@ -2,6 +2,7 @@
 #define CDPI_FLOW_HPP
 
 #include "cdpi_common.hpp"
+#include "cdpi_protocols.hpp"
 
 #include <time.h>
 
@@ -13,6 +14,7 @@
 #include <map>
 #include <set>
 
+#include <boost/regex.hpp>
 #include <boost/shared_ptr.hpp>
 #include <boost/thread.hpp>
 #include <boost/thread/condition.hpp>
@@ -63,6 +65,7 @@ enum cdpi_data_origin {
 class tcp_flow_unidir {
 public:
     std::map<uint32_t, ptr_uint8_t> m_packets;
+    boost::shared_ptr<cdpi_protocols> m_proto;
     uint8_t  m_flags;
     uint32_t m_seq;
     uint32_t m_ack;
@@ -75,8 +78,8 @@ public:
     bool     m_is_rst;
     bool     m_is_fin;
 
-    tcp_flow_unidir() : m_flags(0), m_seq(0), m_ack(0), m_min_seq(0),
-                        m_time(0), m_chksum_err(0), m_dup_num(0), m_num(0),
+    tcp_flow_unidir() : m_flags(0), m_seq(0), m_ack(0), m_min_seq(0), m_time(0),
+                        m_chksum_err(0), m_dup_num(0), m_num(0),
                         m_is_gaveup(false), m_is_rst(false), m_is_fin(false) { }
     virtual ~tcp_flow_unidir() { }
 };
@@ -150,6 +153,15 @@ private:
     void input_tcp_l7(std::set<id_dir> &inq);
     int  read_buf(id_dir &id, uint8_t *buf, int len);
     int  skip_buf(id_dir &id, int len);
+
+    // for http
+    boost::regex m_regex_http_method;
+    boost::regex m_regex_http_res;
+    bool is_http_client(id_dir &id);
+    bool is_http_server(id_dir &id);
+
+    // for TLS 1.0
+    bool is_tls_1_0(id_dir &id);
 
     std::map<cdpi_flow_id_wrapper, ptr_tcp_flow> m_tcp_flow;
     std::map<cdpi_flow_id_wrapper, ptr_udp_flow> m_udp_flow;
