@@ -154,6 +154,7 @@ private:
                    cdpi_flow_id_wrapper id, cdpi_data_origin origin);
     void input_tcp_l7(std::set<id_dir> &inq);
     int  read_buf(const id_dir &id, uint8_t *buf, int len);
+    int  read_buf_eoc(const id_dir &id, uint8_t *buf, int len, uint8_t c);
     int  skip_buf(const id_dir &id, int len);
 
     // for http
@@ -163,7 +164,10 @@ private:
     bool is_http_server(const id_dir &id);
     void init_http_client(const id_dir &id);
     void init_http_server(const id_dir &id);
-
+    void parse_http(const id_dir &id);
+    void parse_http_method(const id_dir &id, tcp_flow_unidir *flow);
+    void parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
+                         tcp_flow_unidir *flow_peer);
 
     // for TLS 1.0
     bool is_tls_1_0(id_dir &id);
