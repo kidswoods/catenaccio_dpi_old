@@ -165,10 +165,14 @@ private:
     void init_http_client(const id_dir &id);
     void init_http_server(const id_dir &id);
     void parse_http(const id_dir &id);
-    void parse_http_method(const id_dir &id, tcp_flow_unidir *flow);
-    void parse_http_response(const id_dir &id, tcp_flow_unidir *flow);
-    void parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
+    bool parse_http_method(const id_dir &id, tcp_flow_unidir *flow);
+    bool parse_http_response(const id_dir &id, tcp_flow_unidir *flow);
+    bool parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
                          tcp_flow_unidir *flow_peer);
+    bool parse_http_body(const id_dir &id, tcp_flow_unidir *flow);
+    bool parse_http_chunk_len(const id_dir &id, tcp_flow_unidir *flow);
+    bool parse_http_chunk_body(const id_dir &id, tcp_flow_unidir *flow);
+    bool parse_http_chunk_el(const id_dir &id, tcp_flow_unidir *flow);
 
     // for TLS 1.0
     bool is_tls_1_0(id_dir &id);

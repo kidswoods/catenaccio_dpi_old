@@ -1,5 +1,7 @@
 #include "cdpi_string.hpp"
 
+#include <cctype>
+
 int
 find_char(char *buf, int len, char c)
 {
@@ -14,4 +16,10 @@ find_char(char *buf, int len, char c)
     }
 
     return -1;
+}
+
+int
+lower_case(int c)
+{
+    return tolower(c);
 }

@@ -5,6 +5,10 @@
 
 #include <string.h>
 
+#include <algorithm>
+#include <cctype>
+#include <sstream>
+
 #include <boost/bind.hpp>
 #include <boost/regex.hpp>
 
@@ -347,6 +351,7 @@ cdpi_flow::parse_http(const id_dir &id)
     ptr_tcp_flow     tcp_flow;
     tcp_flow_unidir *flow, *flow_peer;
     cdpi_http       *p_http;
+    bool             T_T = true;
 
     {
         boost::mutex::scoped_lock lock(m_mutex);
@@ -371,25 +376,178 @@ cdpi_flow::parse_http(const id_dir &id)
 
     p_http = dynamic_cast<cdpi_http*>(p_proto.get());
 
-    // TODO
-    switch (p_http->m_state) {
-    case cdpi_http::HTTP_METHOD:
-        parse_http_method(id, flow);
-        break;
-    case cdpi_http::HTTP_RESPONSE:
-        parse_http_response(id, flow);
-        break;
-    case cdpi_http::HTTP_HEAD:
-        parse_http_head(id, flow, flow_peer);
-        break;
-    case cdpi_http::HTTP_BODY:
-        break;
-    case cdpi_http::HTTP_CHUNK:
-        break;
+    while (T_T) {
+        bool ret;
+
+        switch (p_http->m_state) {
+        case cdpi_http::HTTP_METHOD:
+            ret = parse_http_method(id, flow);
+            break;
+        case cdpi_http::HTTP_RESPONSE:
+            ret = parse_http_response(id, flow);
+            break;
+        case cdpi_http::HTTP_HEAD:
+        case cdpi_http::HTTP_CHUNK_TRAILER:
+            ret = parse_http_head(id, flow, flow_peer);
+            break;
+        case cdpi_http::HTTP_BODY:
+            ret = parse_http_body(id, flow);
+            break;
+        case cdpi_http::HTTP_CHUNK_LEN:
+            ret = parse_http_chunk_len(id, flow);
+            break;
+        case cdpi_http::HTTP_CHUNK_BODY:
+            ret = parse_http_chunk_body(id, flow);
+            break;
+        case cdpi_http::HTTP_CHUNK_EL:
+            ret = parse_http_chunk_el(id, flow);
+            break;
+        }
+
+        if (! ret)
+            break;
     }
 }
 
-void
+bool
+cdpi_flow::parse_http_chunk_el(const id_dir &id, tcp_flow_unidir *flow)
+{
+    cdpi_http *http;
+    int        len;
+    uint8_t    buf[8];
+
+    len = read_buf_ec(id, buf, sizeof(buf), '\n');
+
+    if (len == 1 && buf[0] == '\n' ||
+        len == 2 && memcmp(buf, "\r\n", 2) == 0) {
+        skip_buf(id, len);
+
+        http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+
+        if (http->m_chunk_len == 0) {
+            http->m_state = cdpi_http::HTTP_CHUNK_TRAILER;
+        } else {
+            http->m_state = cdpi_http::HTTP_CHUNK_LEN;
+        }
+
+        http->m_body_read = 0;
+
+        return true;
+    }
+
+    return false;
+}
+
+bool
+cdpi_flow::parse_http_chunk_body(const id_dir &id, tcp_flow_unidir *flow)
+{
+    cdpi_http    *http;
+    int           len;
+    char          buf[1024 * 8];
+
+    http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+
+    while (http->m_body_read < http->m_chunk_len) {
+        len = http->m_chunk_len - http->m_body_read;
+        len = len < (int)sizeof(buf) ? len : sizeof(buf);
+
+        len = skip_buf(id, len);
+
+        if (len == 0)
+            break;
+
+        http->m_body_read += len;
+    }
+
+    if (http->m_body_read >= http->m_chunk_len) {
+        http->m_state = cdpi_http::HTTP_CHUNK_EL;
+        return true;
+    }
+
+    return false;
+}
+
+bool
+cdpi_flow::parse_http_chunk_len(const id_dir &id, tcp_flow_unidir *flow)
+{
+    stringstream  ss;
+    cdpi_http    *http;
+    int           len;
+    uint8_t       buf[128];
+
+    len = read_buf_ec(id, buf, sizeof(buf), '\n');
+
+    if (len > 0 && buf[len - 1] != '\n') {
+        // TODO: parse error
+        return false;
+    }
+
+    http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+
+    ss << buf;
+    ss >> hex >> http->m_chunk_len;
+
+    if (http->m_chunk_len == 0) {
+        http->m_state = cdpi_http::HTTP_CHUNK_EL;
+    } else {
+        http->m_state = cdpi_http::HTTP_CHUNK_BODY;
+    }
+
+    skip_buf(id, len);
+
+    return true;
+}
+
+bool
+cdpi_flow::parse_http_body(const id_dir &id, tcp_flow_unidir *flow)
+{
+    stringstream  ss;
+    cdpi_http    *http;
+    int           content_len;
+    int           len;
+    char          buf[1024 * 8];
+
+    http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+
+    ss << http->get_header("Content-Length");
+    ss >> content_len;
+
+    while (http->m_body_read < content_len) {
+        len = content_len - http->m_body_read;
+        len = len < (int)sizeof(buf) ? len : sizeof(buf);
+
+        len = skip_buf(id, len);
+
+        if (len == 0)
+            break;
+
+        http->m_body_read += len;
+    }
+
+    if (http->m_body_read >= content_len) {
+        switch (http->m_type) {
+        case PROTO_HTTP_CLIENT:
+            http->m_state = cdpi_http::HTTP_METHOD;
+            break;
+        case PROTO_HTTP_SERVER:
+            http->m_state = cdpi_http::HTTP_RESPONSE;
+            break;
+        default:
+            // not to reach
+            assert(http->m_type == PROTO_HTTP_CLIENT ||
+                   http->m_type == PROTO_HTTP_SERVER);
+            return false;
+        }
+
+        http->m_body_read = 0;
+
+        return true;
+    }
+
+    return false;
+}
+
+bool
 cdpi_flow::parse_http_response(const id_dir &id, tcp_flow_unidir *flow)
 {
     cdpi_http *http;
@@ -401,7 +559,7 @@ cdpi_flow::parse_http_response(const id_dir &id, tcp_flow_unidir *flow)
     len = read_buf_ec(id, buf, sizeof(buf), '\n');
 
     if (buf[len - 1] != '\n')
-        return;
+        return false;
 
     http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
 
@@ -409,7 +567,7 @@ cdpi_flow::parse_http_response(const id_dir &id, tcp_flow_unidir *flow)
     n = find_char((char*)buf, len, ' ');
     if (n < 0) {
         // TODO: parse error
-        return;
+        return false;
     }
 
     http->m_ver = string(p, p + n);
@@ -421,7 +579,7 @@ cdpi_flow::parse_http_response(const id_dir &id, tcp_flow_unidir *flow)
     n = find_char((char*)buf, len, ' ');
     if (n < 0) {
         // TODO: parse error
-        return;
+        return false;
     }
 
     http->m_code = string(p, p + n);
@@ -433,7 +591,7 @@ cdpi_flow::parse_http_response(const id_dir &id, tcp_flow_unidir *flow)
     n = find_char((char*)buf, len, '\n');
     if (n < 0) {
         // TODO: parse error
-        return;
+        return false;
     }
 
     if (n > 0 && p[n - 1] == '\r')
@@ -446,9 +604,11 @@ cdpi_flow::parse_http_response(const id_dir &id, tcp_flow_unidir *flow)
 
     // change state to HTTP_HEAD
     http->m_state = cdpi_http::HTTP_HEAD;
+
+    return true;
 }
 
-void
+bool
 cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
                            tcp_flow_unidir *flow_peer)
 {
@@ -462,7 +622,7 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
         len = read_buf_ec(id, buf, sizeof(buf), '\n');
 
         if (buf[len - 1] != '\n')
-            return;
+            return false;
 
         http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
 
@@ -470,7 +630,9 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
             if (memcmp(buf, "\r\n", 2) == 0 || buf[0] == '\n') {
                 switch (http->m_type) {
                 case PROTO_HTTP_CLIENT:
-                    if (http->m_method == "CONNECT") {
+                    if (http->m_state == cdpi_http::HTTP_CHUNK_TRAILER) {
+                        http->m_state = cdpi_http::HTTP_METHOD;
+                    } else if (http->m_method.front() == "CONNECT") {
                         // TODO: proxy
                     } else {
                         string con_len, tr_enc;
@@ -478,40 +640,61 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
                         con_len = http->get_header("Content-Length");
                         tr_enc  = http->get_header("Transfer-Encoding");
 
+                        transform(tr_enc.begin(), tr_enc.end(),
+                                  tr_enc.begin(), lower_case);
+
                         if (con_len != "") {
                             http->m_state = cdpi_http::HTTP_BODY;
                         } else if (tr_enc == "chunked") {
-                            http->m_state = cdpi_http::HTTP_CHUNK;
+                            http->m_state = cdpi_http::HTTP_CHUNK_LEN;
                         } else {
                             http->m_state = cdpi_http::HTTP_METHOD;
                         }
                     }
                     break;
                 case PROTO_HTTP_SERVER:
+                {
                     http_peer = dynamic_cast<cdpi_http*>(flow_peer->m_proto.get());
-                    if (http_peer->m_method == "CONNECT") {
+                    string method = http_peer->m_method.front();
+
+                    if (http->m_state == cdpi_http::HTTP_CHUNK_TRAILER) {
+                        http->m_state = cdpi_http::HTTP_RESPONSE;
+                    } else if (method == "CONNECT") {
                         // TODO: proxy
+                    } else if (method == "HEAD" ||
+                               http->m_code == "204" ||
+                               http->m_code == "205" ||
+                               http->m_code == "304") {
+                        http->m_state = cdpi_http::HTTP_RESPONSE;
                     } else {
                         string tr_enc;
 
                         tr_enc  = http->get_header("Transfer-Encoding");
 
                         if (tr_enc == "chunked") {
-                            http->m_state = cdpi_http::HTTP_CHUNK;
+                            http->m_state = cdpi_http::HTTP_CHUNK_LEN;
                         } else {
                             http->m_state = cdpi_http::HTTP_BODY;
                         }
                     }
+
+                    http_peer->m_method.pop();
+
+                    break;
+                }
                 default:
-                    return;
+                    // not to reach
+                    assert(http->m_type == PROTO_HTTP_CLIENT ||
+                           http->m_type == PROTO_HTTP_SERVER);
+                    return false;
                 }
 
                 skip_buf(id, len);
 
-                return;
+                return true;
             } else {
                 // TODO: parse error
-                return;
+                return false;
             }
         } else {
             string   key, val;
@@ -549,9 +732,12 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
             skip_buf(id, len);
         }
     }
+
+    // not to reach
+    return false;
 }
 
-void
+bool
 cdpi_flow::parse_http_method(const id_dir &id, tcp_flow_unidir *flow)
 {
     cdpi_http *http;
@@ -563,7 +749,7 @@ cdpi_flow::parse_http_method(const id_dir &id, tcp_flow_unidir *flow)
     len = read_buf_ec(id, buf, sizeof(buf), '\n');
 
     if (buf[len - 1] != '\n')
-        return;
+        return false;
 
     http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
 
@@ -571,10 +757,10 @@ cdpi_flow::parse_http_method(const id_dir &id, tcp_flow_unidir *flow)
     n = find_char((char*)p, len, ' ');
     if (n < 0) {
         // TODO: parse error
-        return;
+        return false;
     }
 
-    http->m_method = string(p, p + n);
+    http->m_method.push(string(p, p + n));
     p   += n + 1;
     len -= n + 1;
 
@@ -582,7 +768,7 @@ cdpi_flow::parse_http_method(const id_dir &id, tcp_flow_unidir *flow)
     n = find_char((char*)p, len, ' ');
     if (n < 0) {
         // TODO: parse error
-        return;
+        return false;
     }
 
     http->m_uri = string(p, p + n);
@@ -593,7 +779,7 @@ cdpi_flow::parse_http_method(const id_dir &id, tcp_flow_unidir *flow)
     n = find_char((char*)p, len, '\n');
     if (n < 0) {
         // TODO: parse error
-        return;
+        return false;
     }
 
     if (n > 0 && p[n - 1] == '\r') 
@@ -606,6 +792,8 @@ cdpi_flow::parse_http_method(const id_dir &id, tcp_flow_unidir *flow)
 
     // change state to HTTP_HEAD
     http->m_state = cdpi_http::HTTP_HEAD;
+
+    return true;
 }
 
 void
