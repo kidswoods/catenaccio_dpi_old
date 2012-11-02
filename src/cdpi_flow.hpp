@@ -118,15 +118,15 @@ public:
     mutable cdpi_proto_type m_type;
 
     bool operator< (const id_dir &rhs) const {
-        if (m_id == rhs.m_id)
-            return m_org < rhs.m_org;
+        if (m_org == rhs.m_org)
+            return m_id < rhs.m_id;
 
-        return m_id < rhs.m_id;
+        return m_org < rhs.m_org;
     }
 
     bool operator> (const id_dir &rhs) const { return rhs < *this; }
     bool operator== (const id_dir &rhs) const {
-        return m_id == rhs.m_id && m_org == rhs.m_org;
+        return m_org == rhs.m_org && m_id == rhs.m_id;
     }
 };
 

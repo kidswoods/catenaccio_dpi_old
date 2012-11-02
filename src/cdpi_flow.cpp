@@ -14,12 +14,14 @@
 
 const uint32_t MAX_WINDOW_SIZE = 65535;
 
-static const char *regex_http_req = "^[A-Z] .? HTTP/(1.0|1.1)\r\n([a-zA-Z][a-zA-Z-]?: .?\r\n)?";
-static const char *regex_http_res = "^HTTP/(1.0|1.1) [0-9]{3} .?\r\n([a-zA-Z-][a-zA-Z]?: .?\r\n)?";
+static const char *regex_http_req = "^[A-Z]+ .+ HTTP/(1.0|1.1)\r?\n(([a-zA-Z]|-)+: .+\r?\n)*.*";
+static const char *regex_http_res = "^HTTP/(1.0|1.1) [0-9]{3} .+\r?\n(([a-zA-Z]|-)+: .+\r?\n)*.*";
+
 
 using namespace std;
 
 class REDETECT_PROTO { };
+class PARSE_LATER { };
 
 cdpi_flow::cdpi_flow() : m_regex_http_req(regex_http_req),
                          m_regex_http_res(regex_http_res),
@@ -141,6 +143,7 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
     data_len = (int)len - (int)iph->ip_hl * 4 - (int)tcph->th_off * 4;
 
 #ifdef DEBUG
+/*
     cout << "flags = ";
     if (tcph->th_flags & TH_SYN)
         cout << "S";
@@ -151,6 +154,7 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
     if (tcph->th_flags & TH_RST)
         cout << "R";
     cout << endl;
+*/
 #endif // DEBUG
 
     if (data_len < 0)
@@ -169,8 +173,8 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
             flow_uni->m_is_rst = true;
         } else {
             if (data_len > 0) {
-                D((cout << "insert: seq = " << seq
-                   << ", len = " << data_len << endl));
+                D((cout << "insert(" << (void*)data.get() << "): seq = " << seq
+                   << ", len = " << data_len << ", from = " << origin << endl));
 
                 flow_uni->m_packets[seq] = data;
                 flow_uni->m_seq          = seq;
@@ -202,8 +206,7 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
         } else {
             if (flow_uni->m_time == 0) {
                 if (data_len > 0) {
-                    D((cout << "insert: seq = " << seq
-                       << ", len = " << data_len << endl));
+                    D((cout << "insert(" << (void*)data.get() << "): seq = " << seq << ", len = " << data_len << ", from = " << origin << endl));
 
                     flow_uni->m_packets[seq] = data;
                     flow_uni->m_seq          = seq;
@@ -227,8 +230,7 @@ cdpi_flow::input_tcp(uint8_t *bytes, size_t len, tcphdr *tcph,
                             if (flow_uni->m_packets.size() == 0)
                                 flow_uni->m_min_seq = seq;
 
-                            D((cout << "insert: seq = " << seq
-                               << ", len = " << data_len << endl));
+                            D((cout << "insert(" << (void*)data.get() << "): seq = " << seq << ", len = " << data_len << ", from = " << origin << endl));
 
                             flow_uni->m_packets[seq] = data;
                         }
@@ -282,14 +284,19 @@ cdpi_flow::run()
                 uint8_t l4_proto = it_inq->m_id.m_id->l4_proto;
 
                 if (l4_proto == IPPROTO_TCP) {
+                    map<cdpi_flow_id_wrapper, ptr_tcp_flow>::iterator it_tcp;
                     map<uint32_t, ptr_uint8_t>::iterator it_pkt;
                     map<id_dir, pkt_buf>::iterator       it_m_pkt;
                     tcp_flow_unidir *flow;
 
+                    it_tcp = m_tcp_flow.find(it_inq->m_id);
+                    if (it_tcp == m_tcp_flow.end())
+                        continue;
+
                     if (it_inq->m_org == FROM_ADDR1)
-                        flow = &m_tcp_flow[it_inq->m_id]->m_flow1;
+                        flow = &it_tcp->second->m_flow1;
                     else
-                        flow = &m_tcp_flow[it_inq->m_id]->m_flow2;
+                        flow = &it_tcp->second->m_flow2;
 
                     it_m_pkt = m_packets.find(*it_inq);
                     if (it_m_pkt == m_packets.end()) {
@@ -309,7 +316,7 @@ cdpi_flow::run()
                         it_m_pkt->second.m_buf.push_back(it_pkt->second);
                         flow->m_packets.erase(seq);
 
-                        D((cout << "consume: seq = " << seq << ", len = " << len << endl));
+                        D((cout << "consume(" << (void*)it_pkt->second.get() << "): seq = " << seq << ", len = " << len << ", from = " << it_m_pkt->first.m_org << endl));
 
                         seq += len;
                         
@@ -369,7 +376,7 @@ cdpi_flow::parse_http(const id_dir &id)
             flow_peer = &it_tcp->second->m_flow1;
         }
 
-        if (flow->m_proto->m_type != PROTO_HTTP_CLIENT ||
+        if (flow->m_proto->m_type != PROTO_HTTP_CLIENT &&
             flow->m_proto->m_type != PROTO_HTTP_SERVER)
             return;
 
@@ -554,19 +561,21 @@ cdpi_flow::parse_http_response(const id_dir &id, tcp_flow_unidir *flow)
 {
     ptr_cdpi_http http;
     int           n;
-    int           len;
+    int           remain;
     uint8_t       buf[1024 * 8];
-    uint8_t      *p = buf;
+    uint8_t      *p   = buf;
+    const int     len = read_buf_ec(id, buf, sizeof(buf), '\n');
 
-    len = read_buf_ec(id, buf, sizeof(buf), '\n');
+    remain = len;
 
-    if (buf[len - 1] != '\n')
+    if (buf[len - 1] != '\n') {
         return false;
+    }
 
     http = boost::dynamic_pointer_cast<cdpi_http>(flow->m_proto);
 
     // read http version
-    n = find_char((char*)buf, len, ' ');
+    n = find_char((char*)p, remain, ' ');
     if (n < 0) {
         // TODO: parse error
         return false;
@@ -574,11 +583,11 @@ cdpi_flow::parse_http_response(const id_dir &id, tcp_flow_unidir *flow)
 
     http->m_ver = string(p, p + n);
 
-    p   += n + 1;
-    len -= n + 1;
+    p      += n + 1;
+    remain -= n + 1;
 
     // read status code
-    n = find_char((char*)buf, len, ' ');
+    n = find_char((char*)p, remain, ' ');
     if (n < 0) {
         // TODO: parse error
         return false;
@@ -586,11 +595,11 @@ cdpi_flow::parse_http_response(const id_dir &id, tcp_flow_unidir *flow)
 
     http->m_code = string(p, p + n);
 
-    p   += n + 1;
-    len -= n + 1;
+    p      += n + 1;
+    remain -= n + 1;
 
     // read responce message
-    n = find_char((char*)buf, len, '\n');
+    n = find_char((char*)p, remain, '\n');
     if (n < 0) {
         // TODO: parse error
         return false;
@@ -607,6 +616,9 @@ cdpi_flow::parse_http_response(const id_dir &id, tcp_flow_unidir *flow)
     // change state to HTTP_HEAD
     http->m_state = cdpi_http::HTTP_HEAD;
 
+    // TODO: event http response
+    cout << http->m_ver << " " << http->m_code << " " << http->m_res_msg << endl;
+
     return true;
 }
 
@@ -615,13 +627,12 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
                            tcp_flow_unidir *flow_peer)
 {
     ptr_cdpi_http http, http_peer;
-    int           len;
     uint8_t       buf[1024 * 8];
 
     buf[1] = 0;
 
     for (;;) {
-        len = read_buf_ec(id, buf, sizeof(buf), '\n');
+        const int len = read_buf_ec(id, buf, sizeof(buf), '\n');
 
         if (buf[len - 1] != '\n')
             return false;
@@ -642,6 +653,9 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
                         flow->m_proto.reset();
 
                         skip_buf(id, len);
+
+                        // TODO: event htto proxy
+                        cout << "PROXY Client!!!" << endl;
 
                         throw REDETECT_PROTO();
                     } else {
@@ -670,10 +684,28 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
 
                     if (flow_peer->m_proto) {
                         http_peer = boost::dynamic_pointer_cast<cdpi_http>(flow_peer->m_proto);
+                        if (http_peer->m_method.size() == 0) {
+                            if (http->m_is_skip) {
+                                http->m_is_skip = false;
+                                return false;
+                            } else {
+                                http->m_is_skip = true;
+                                throw PARSE_LATER();
+                            }
+                        }
+
                         method = http_peer->m_method.front();
                     } else if (flow_peer->m_proto_proxy.size() > 0 &&
                                flow_peer->m_proto_proxy.front()->m_type == PROTO_HTTP_PROXY) {
                         http_peer = boost::dynamic_pointer_cast<cdpi_http>(flow_peer->m_proto_proxy.front());
+                    } else {
+                        if (http->m_is_skip) {
+                            http->m_is_skip = false;
+                            return false;
+                        } else {
+                            http->m_is_skip = true;
+                            throw PARSE_LATER();
+                        }
                     }
 
                     if (http->m_state == cdpi_http::HTTP_CHUNK_TRAILER) {
@@ -686,6 +718,9 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
                         flow->m_proto.reset();
 
                         skip_buf(id, len);
+
+                        // TODO: event http proxy
+                        cout << "PROXY Server!!!" << endl;
 
                         throw REDETECT_PROTO();
                     } else if (method == "HEAD" ||
@@ -718,6 +753,8 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
 
                 skip_buf(id, len);
 
+                // TODO: event http head
+
                 return true;
             } else {
                 // TODO: parse error
@@ -728,22 +765,25 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
             int      pos = find_char((char*)buf, len, ':');
             uint8_t *p;
 
-            if (pos < 0)
-                continue;
-
-            key = string(buf, buf + pos + 1);
-
-            if (pos + 1 < len) {
-                if (buf[pos + 1] == ' ')
-                    p = buf + pos + 2;
-                else
-                    p = buf + pos + 1;
-            } else {
+            if (pos < 0) {
+                // TODO: parse error
+                cout << "parse error 1" << endl;
+                skip_buf(id, len);
                 continue;
             }
 
-            if (p >= buf + len)
+            key = string(buf, buf + pos);
+
+            p = buf + pos + 1;
+
+            while (p < buf + len && *p == ' ')
+                p++;
+
+            if (p >= buf + len) {
+                cout << "parse error 2" << endl;
+                skip_buf(id, len);
                 continue;
+            }
 
             for (uint8_t *p2 = p; p2 < buf + len; p2++) {
                 if (*p2 == '\r' || *p2 == '\n') {
@@ -757,6 +797,8 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
             http->set_header(key, val);
 
             skip_buf(id, len);
+
+            cout << key << " = " << val << endl;
         }
     }
 
@@ -769,11 +811,12 @@ cdpi_flow::parse_http_method(const id_dir &id, tcp_flow_unidir *flow)
 {
     ptr_cdpi_http http;
     int           len;
+    int           remain;
     int           n;
     uint8_t       buf[1024 * 8];
     uint8_t      *p = buf;
 
-    len = read_buf_ec(id, buf, sizeof(buf), '\n');
+    len = remain = read_buf_ec(id, buf, sizeof(buf), '\n');
 
     if (buf[len - 1] != '\n')
         return false;
@@ -781,44 +824,48 @@ cdpi_flow::parse_http_method(const id_dir &id, tcp_flow_unidir *flow)
     http = boost::dynamic_pointer_cast<cdpi_http>(flow->m_proto);
 
     // read method
-    n = find_char((char*)p, len, ' ');
+    n = find_char((char*)p, remain, ' ');
     if (n < 0) {
         // TODO: parse error
         return false;
     }
 
     http->m_method.push(string(p, p + n));
-    p   += n + 1;
-    len -= n + 1;
+    p      += n + 1;
+    remain -= n + 1;
 
     // read URI
-    n = find_char((char*)p, len, ' ');
+    n = find_char((char*)p, remain, ' ');
     if (n < 0) {
         // TODO: parse error
         return false;
     }
 
     http->m_uri = string(p, p + n);
-    p   += n + 1;
-    len -= n + 1;
+    p      += n + 1;
+    remain -= n + 1;
 
     // read version
-    n = find_char((char*)p, len, '\n');
+    n = find_char((char*)p, remain, '\n');
     if (n < 0) {
         // TODO: parse error
         return false;
     }
 
     if (n > 0 && p[n - 1] == '\r') 
-        http->m_uri = string(p, p + n - 1);
+        http->m_ver = string(p, p + n - 1);
     else
-        http->m_uri = string(p, p + n);
+        http->m_ver = string(p, p + n);
 
     // skip read buffer
     skip_buf(id, len);
 
     // change state to HTTP_HEAD
     http->m_state = cdpi_http::HTTP_HEAD;
+
+    // TODO: event http method
+    cout << http->m_method.back() << " " << http->m_uri << " "
+         << http->m_ver << endl;
 
     return true;
 }
@@ -828,8 +875,12 @@ cdpi_flow::input_tcp_l7(set<id_dir> &inq)
 {
     set<id_dir>::iterator it_inq;
 
+    cout << "input_tcp_l7" << endl;
+
     for (it_inq = inq.begin(); it_inq != inq.end(); ++it_inq) {
-        cdpi_proto_type proto;
+        cdpi_proto_type proto = it_inq->m_type;
+
+        cout << "m_type = " << it_inq->m_type << endl;
 
     detect_proto:
         if (it_inq->m_type == PROTO_NONE) {
@@ -837,10 +888,14 @@ cdpi_flow::input_tcp_l7(set<id_dir> &inq)
                 // TODO: event, detect http client
                 init_http_client(*it_inq);
                 proto = PROTO_HTTP_CLIENT;
+
+                cout << "proto: http cleint" << endl;
             } else if (is_http_server(*it_inq)) {
                 // TODO: event, detect http server
                 init_http_server(*it_inq);
                 proto = PROTO_HTTP_SERVER;
+
+                cout << "proto: http server" << endl;
             } else {
                 map<id_dir, pkt_buf>::iterator it_pkt = m_packets.find(*it_inq);
                 if (it_pkt->second.m_buf.size() > 32) {
@@ -884,11 +939,16 @@ cdpi_flow::input_tcp_l7(set<id_dir> &inq)
         } catch (REDETECT_PROTO e) {
             it_inq->m_type = PROTO_NONE;
             goto detect_proto;
+        } catch (PARSE_LATER e) {
+            boost::mutex::scoped_lock lock(m_mutex);
+            m_inq.insert(*it_inq);
         }
 
 
         skip_parse:
-        // remove connection when FIN or RST was recieved
+        ;
+        // TODO: remove connection when FIN or RST was recieved
+/*
         {
             boost::mutex::scoped_lock lock(m_mutex);
 
@@ -909,13 +969,14 @@ cdpi_flow::input_tcp_l7(set<id_dir> &inq)
                 if ((flow->m_is_fin && flow_peer->m_is_fin) ||
                     flow->m_is_rst || flow_peer->m_is_rst) {
                     // TODO: event, close connection
-                    m_tcp_flow.erase(it_inq->m_id);
-                    m_packets.erase(*it_inq);
+                    //m_tcp_flow.erase(it_inq->m_id);
+                    //m_packets.erase(*it_inq);
                 }
             } else {
-                m_packets.erase(*it_inq);
+                //m_packets.erase(*it_inq);
             }
         }
+*/
     }
 }
 
@@ -993,9 +1054,13 @@ bool
 cdpi_flow::is_http_client(const id_dir &id)
 {
     map<id_dir, pkt_buf>::iterator it = m_packets.find(id);
+
+    if (it == m_packets.end() || it->second.m_buf.size() == 0)
+        return false;
+
     ip     *iph  = (ip*)it->second.m_buf.begin()->get();
     tcphdr *tcph = (tcphdr*)((uint8_t*)iph + iph->ip_hl * 4);
-    int     hlen = iph->ip_hl * 4 - tcph->th_off * 4;
+    int     hlen = iph->ip_hl * 4 + tcph->th_off * 4;
     int     len  = iph->ip_len - hlen;
     string  data((char*)iph + hlen, (char*)iph + hlen + len);
 
@@ -1006,13 +1071,17 @@ bool
 cdpi_flow::is_http_server(const id_dir &id)
 {
     map<id_dir, pkt_buf>::iterator it = m_packets.find(id);
+
+    if (it == m_packets.end() || it->second.m_buf.size() == 0)
+        return false;
+
     ip     *iph  = (ip*)it->second.m_buf.begin()->get();
     tcphdr *tcph = (tcphdr*)((uint8_t*)iph + iph->ip_hl * 4);
-    int     hlen = iph->ip_hl * 4 - tcph->th_off * 4;
+    int     hlen = iph->ip_hl * 4 + tcph->th_off * 4;
     int     len  = iph->ip_len - hlen;
     string  data((char*)iph + hlen, (char*)iph + hlen + len);
 
-    return boost::regex_match(data, m_regex_http_req);
+    return boost::regex_match(data, m_regex_http_res);
 }
 
 bool
@@ -1128,7 +1197,7 @@ cdpi_flow::skip_buf(const id_dir &id, int len)
         if (availlen <= reqlen) {
             cpylen = availlen;
             it_pkt->second.m_pos = 0;
-            it_pkt->second.m_buf.erase(++it_buf);
+            it_pkt->second.m_buf.erase(it_buf++);
         } else {
             cpylen = reqlen;
             it_pkt->second.m_pos += reqlen;

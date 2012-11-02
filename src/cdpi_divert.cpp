@@ -21,7 +21,6 @@ void callback_ipv4(evutil_socket_t fd, short what, void *arg)
     socklen_t    sin_len;
     ssize_t      size;
     uint8_t      buf[1024 * 100];
-    char         src[32], dst[32];
 
     sin_len = sizeof(sin);
     size = recvfrom(fd, buf, sizeof(buf), 0, (sockaddr*)&sin, &sin_len);
@@ -32,7 +31,9 @@ void callback_ipv4(evutil_socket_t fd, short what, void *arg)
     }
 
 #ifdef DEBUG
-    ip          *hdr;
+    ip   *hdr;
+    char  src[32], dst[32];
+
     hdr = (ip*)buf;
 
     inet_ntop(PF_INET, &hdr->ip_src, src, sizeof(src));

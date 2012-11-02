@@ -41,7 +41,7 @@ public:
         HTTP_CHUNK_TRAILER,
     };
 
-    cdpi_http() : m_body_read(0) { }
+    cdpi_http() : m_body_read(0), m_is_skip(false) { }
     virtual ~cdpi_http() { }
 
     void set_header(std::string key, std::string val);
@@ -53,8 +53,9 @@ public:
     std::string m_code;
     std::string m_res_msg;
     std::queue<std::string> m_method;
-    int m_body_read;
-    int m_chunk_len;
+    int  m_body_read;
+    int  m_chunk_len;
+    bool m_is_skip;
 
 private:
     std::map<std::string, std::string> m_headers;
