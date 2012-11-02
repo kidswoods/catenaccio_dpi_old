@@ -19,6 +19,8 @@ static const char *regex_http_res = "^HTTP/(1.0|1.1) [0-9]{3} .?\r\n([a-zA-Z-][a
 
 using namespace std;
 
+class REDETECT_PROTO { };
+
 cdpi_flow::cdpi_flow() : m_regex_http_req(regex_http_req),
                          m_regex_http_res(regex_http_res),
                          m_thread(boost::bind(&cdpi_flow::run, this))
@@ -347,10 +349,10 @@ void
 cdpi_flow::parse_http(const id_dir &id)
 {
     map<cdpi_flow_id_wrapper, ptr_tcp_flow>::iterator it_tcp;
-    boost::shared_ptr<cdpi_protocols> p_proto;
+    ptr_cdpi_proto   p_proto;
+    ptr_cdpi_http    p_http;
     ptr_tcp_flow     tcp_flow;
     tcp_flow_unidir *flow, *flow_peer;
-    cdpi_http       *p_http;
     bool             T_T = true;
 
     {
@@ -374,7 +376,7 @@ cdpi_flow::parse_http(const id_dir &id)
         p_proto = flow->m_proto;
     }
 
-    p_http = dynamic_cast<cdpi_http*>(p_proto.get());
+    p_http = boost::dynamic_pointer_cast<cdpi_http>(p_proto);
 
     while (T_T) {
         bool ret;
@@ -412,9 +414,9 @@ cdpi_flow::parse_http(const id_dir &id)
 bool
 cdpi_flow::parse_http_chunk_el(const id_dir &id, tcp_flow_unidir *flow)
 {
-    cdpi_http *http;
-    int        len;
-    uint8_t    buf[8];
+    ptr_cdpi_http http;
+    int           len;
+    uint8_t       buf[8];
 
     len = read_buf_ec(id, buf, sizeof(buf), '\n');
 
@@ -422,7 +424,7 @@ cdpi_flow::parse_http_chunk_el(const id_dir &id, tcp_flow_unidir *flow)
         len == 2 && memcmp(buf, "\r\n", 2) == 0) {
         skip_buf(id, len);
 
-        http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+        http = boost::dynamic_pointer_cast<cdpi_http>(flow->m_proto);
 
         if (http->m_chunk_len == 0) {
             http->m_state = cdpi_http::HTTP_CHUNK_TRAILER;
@@ -441,11 +443,11 @@ cdpi_flow::parse_http_chunk_el(const id_dir &id, tcp_flow_unidir *flow)
 bool
 cdpi_flow::parse_http_chunk_body(const id_dir &id, tcp_flow_unidir *flow)
 {
-    cdpi_http    *http;
+    ptr_cdpi_http http;
     int           len;
     char          buf[1024 * 8];
 
-    http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+    http = boost::dynamic_pointer_cast<cdpi_http>(flow->m_proto);
 
     while (http->m_body_read < http->m_chunk_len) {
         len = http->m_chunk_len - http->m_body_read;
@@ -471,7 +473,7 @@ bool
 cdpi_flow::parse_http_chunk_len(const id_dir &id, tcp_flow_unidir *flow)
 {
     stringstream  ss;
-    cdpi_http    *http;
+    ptr_cdpi_http http;
     int           len;
     uint8_t       buf[128];
 
@@ -482,7 +484,7 @@ cdpi_flow::parse_http_chunk_len(const id_dir &id, tcp_flow_unidir *flow)
         return false;
     }
 
-    http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+    http = boost::dynamic_pointer_cast<cdpi_http>(flow->m_proto);
 
     ss << buf;
     ss >> hex >> http->m_chunk_len;
@@ -502,12 +504,12 @@ bool
 cdpi_flow::parse_http_body(const id_dir &id, tcp_flow_unidir *flow)
 {
     stringstream  ss;
-    cdpi_http    *http;
+    ptr_cdpi_http http;
     int           content_len;
     int           len;
     char          buf[1024 * 8];
 
-    http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+    http = boost::dynamic_pointer_cast<cdpi_http>(flow->m_proto);
 
     ss << http->get_header("Content-Length");
     ss >> content_len;
@@ -550,18 +552,18 @@ cdpi_flow::parse_http_body(const id_dir &id, tcp_flow_unidir *flow)
 bool
 cdpi_flow::parse_http_response(const id_dir &id, tcp_flow_unidir *flow)
 {
-    cdpi_http *http;
-    int        n;
-    int        len;
-    uint8_t    buf[1024 * 8];
-    uint8_t   *p = buf;
+    ptr_cdpi_http http;
+    int           n;
+    int           len;
+    uint8_t       buf[1024 * 8];
+    uint8_t      *p = buf;
 
     len = read_buf_ec(id, buf, sizeof(buf), '\n');
 
     if (buf[len - 1] != '\n')
         return false;
 
-    http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+    http = boost::dynamic_pointer_cast<cdpi_http>(flow->m_proto);
 
     // read http version
     n = find_char((char*)buf, len, ' ');
@@ -612,9 +614,9 @@ bool
 cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
                            tcp_flow_unidir *flow_peer)
 {
-    cdpi_http *http, *http_peer;
-    int        len;
-    uint8_t    buf[1024 * 8];
+    ptr_cdpi_http http, http_peer;
+    int           len;
+    uint8_t       buf[1024 * 8];
 
     buf[1] = 0;
 
@@ -624,16 +626,24 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
         if (buf[len - 1] != '\n')
             return false;
 
-        http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+        http = boost::dynamic_pointer_cast<cdpi_http>(flow->m_proto);
 
         if (len == 2 || len == 1) {
             if (memcmp(buf, "\r\n", 2) == 0 || buf[0] == '\n') {
                 switch (http->m_type) {
                 case PROTO_HTTP_CLIENT:
+                {
                     if (http->m_state == cdpi_http::HTTP_CHUNK_TRAILER) {
                         http->m_state = cdpi_http::HTTP_METHOD;
                     } else if (http->m_method.front() == "CONNECT") {
-                        // TODO: proxy
+                        // proxy
+                        flow->m_proto->m_type = PROTO_HTTP_PROXY;
+                        flow->m_proto_proxy.push_front(flow->m_proto);
+                        flow->m_proto.reset();
+
+                        skip_buf(id, len);
+
+                        throw REDETECT_PROTO();
                     } else {
                         string con_len, tr_enc;
 
@@ -651,16 +661,33 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
                             http->m_state = cdpi_http::HTTP_METHOD;
                         }
                     }
+
                     break;
+                }
                 case PROTO_HTTP_SERVER:
                 {
-                    http_peer = dynamic_cast<cdpi_http*>(flow_peer->m_proto.get());
-                    string method = http_peer->m_method.front();
+                    string method;
+
+                    if (flow_peer->m_proto) {
+                        http_peer = boost::dynamic_pointer_cast<cdpi_http>(flow_peer->m_proto);
+                        method = http_peer->m_method.front();
+                    } else if (flow_peer->m_proto_proxy.size() > 0 &&
+                               flow_peer->m_proto_proxy.front()->m_type == PROTO_HTTP_PROXY) {
+                        http_peer = boost::dynamic_pointer_cast<cdpi_http>(flow_peer->m_proto_proxy.front());
+                    }
 
                     if (http->m_state == cdpi_http::HTTP_CHUNK_TRAILER) {
                         http->m_state = cdpi_http::HTTP_RESPONSE;
-                    } else if (method == "CONNECT") {
-                        // TODO: proxy
+                    } else if (http_peer->m_type == PROTO_HTTP_PROXY ||
+                               method == "CONNECT") {
+                        // proxy
+                        flow->m_proto->m_type = PROTO_HTTP_PROXY;
+                        flow->m_proto_proxy.push_front(flow->m_proto);
+                        flow->m_proto.reset();
+
+                        skip_buf(id, len);
+
+                        throw REDETECT_PROTO();
                     } else if (method == "HEAD" ||
                                http->m_code == "204" ||
                                http->m_code == "205" ||
@@ -740,18 +767,18 @@ cdpi_flow::parse_http_head(const id_dir &id, tcp_flow_unidir *flow,
 bool
 cdpi_flow::parse_http_method(const id_dir &id, tcp_flow_unidir *flow)
 {
-    cdpi_http *http;
-    int        len;
-    int        n;
-    uint8_t    buf[1024 * 8];
-    uint8_t   *p = buf;
+    ptr_cdpi_http http;
+    int           len;
+    int           n;
+    uint8_t       buf[1024 * 8];
+    uint8_t      *p = buf;
 
     len = read_buf_ec(id, buf, sizeof(buf), '\n');
 
     if (buf[len - 1] != '\n')
         return false;
 
-    http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+    http = boost::dynamic_pointer_cast<cdpi_http>(flow->m_proto);
 
     // read method
     n = find_char((char*)p, len, ' ');
@@ -804,6 +831,7 @@ cdpi_flow::input_tcp_l7(set<id_dir> &inq)
     for (it_inq = inq.begin(); it_inq != inq.end(); ++it_inq) {
         cdpi_proto_type proto;
 
+    detect_proto:
         if (it_inq->m_type == PROTO_NONE) {
             if (is_http_client(*it_inq)) {
                 // TODO: event, detect http client
@@ -841,16 +869,21 @@ cdpi_flow::input_tcp_l7(set<id_dir> &inq)
         }
 
 
-        // analyze L7
-        switch (proto) {
-        case PROTO_HTTP_CLIENT:
-        case PROTO_HTTP_SERVER:
-            parse_http(*it_inq);
-            break;
-        case PROTO_TLS_1_0:
-            break;
-        default:
-            break;
+        try {
+            // analyze L7
+            switch (proto) {
+            case PROTO_HTTP_CLIENT:
+            case PROTO_HTTP_SERVER:
+                parse_http(*it_inq);
+                break;
+            case PROTO_TLS_1_0:
+                break;
+            default:
+                break;
+            }
+        } catch (REDETECT_PROTO e) {
+            it_inq->m_type = PROTO_NONE;
+            goto detect_proto;
         }
 
 
@@ -902,10 +935,10 @@ cdpi_flow::init_http_client(const id_dir &id)
         flow = &it_tcp->second->m_flow2;
     }
 
-    flow->m_proto = boost::shared_ptr<cdpi_protocols>(new cdpi_http);
+    flow->m_proto = ptr_cdpi_proto(new cdpi_http);
     flow->m_proto->m_type = PROTO_HTTP_CLIENT;
 
-    cdpi_http *p_http = dynamic_cast<cdpi_http*>(flow->m_proto.get());
+    ptr_cdpi_http p_http(boost::dynamic_pointer_cast<cdpi_http>(flow->m_proto));
     p_http->m_state = cdpi_http::HTTP_METHOD;
 }
 
@@ -927,10 +960,10 @@ cdpi_flow::init_http_server(const id_dir &id)
         client = &it_tcp->second->m_flow1;
     }
 
-    server->m_proto = boost::shared_ptr<cdpi_protocols>(new cdpi_http);
+    server->m_proto = ptr_cdpi_proto(new cdpi_http);
     server->m_proto->m_type = PROTO_HTTP_SERVER;
 
-    cdpi_http *p_http = dynamic_cast<cdpi_http*>(server->m_proto.get());
+    ptr_cdpi_http p_http(boost::dynamic_pointer_cast<cdpi_http>(server->m_proto));
     p_http->m_state = cdpi_http::HTTP_RESPONSE;
 
     if (! client->m_proto || client->m_proto->m_type != PROTO_HTTP_CLIENT) {

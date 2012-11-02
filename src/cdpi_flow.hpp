@@ -31,6 +31,13 @@ struct cdpi_flow_peer {
 struct cdpi_flow_id {
     // addr1 must be less than addr2
     cdpi_flow_peer addr1, addr2;
+#define ipv4_addr1 addr1.l3_addr.b32
+#define ipv4_addr2 addr2.l3_addr.b32
+#define ipv6_addr1 addr1.l3_addr.b128
+#define ipv6_addr2 addr2.l3_addr.b128
+#define l4_port1 addr1.l4_port
+#define l4_port2 addr2.l4_port
+
     uint8_t  l3_proto;
     uint8_t  l4_proto;
 };
@@ -50,13 +57,6 @@ public:
     bool operator== (const cdpi_flow_id_wrapper &rhs) const;
 };
 
-#define ipv4_addr1 addr1.l3_addr.b32
-#define ipv4_addr2 addr2.l3_addr.b32
-#define ipv6_addr1 addr1.l3_addr.b128
-#define ipv6_addr2 addr2.l3_addr.b128
-#define l4_port1 addr1.l4_port
-#define l4_port2 addr2.l4_port
-
 enum cdpi_data_origin {
     FROM_ADDR1,
     FROM_ADDR2
@@ -64,9 +64,9 @@ enum cdpi_data_origin {
 
 class tcp_flow_unidir {
 public:
-    std::map<uint32_t, ptr_uint8_t>   m_packets;
-    boost::shared_ptr<cdpi_protocols> m_proto;
-    boost::shared_ptr<cdpi_protocols> m_proto_proxy;
+    std::map<uint32_t, ptr_uint8_t> m_packets;
+    ptr_cdpi_proto            m_proto;
+    std::list<ptr_cdpi_proto> m_proto_proxy;
     uint8_t  m_flags;
     uint32_t m_seq;
     uint32_t m_ack;

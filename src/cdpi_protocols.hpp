@@ -7,11 +7,13 @@
 #include <string>
 #include <queue>
 
+#include <boost/shared_ptr.hpp>
 #include <boost/thread.hpp>
 
 enum cdpi_proto_type {
     PROTO_HTTP_CLIENT,
     PROTO_HTTP_SERVER,
+    PROTO_HTTP_PROXY,
     PROTO_TLS_1_0,
     PROTO_NONE
 };
@@ -59,5 +61,8 @@ private:
     boost::mutex m_mutex;
 
 };
+
+typedef boost::shared_ptr<cdpi_protocols> ptr_cdpi_proto;
+typedef boost::shared_ptr<cdpi_http> ptr_cdpi_http;
 
 #endif // CDPI_PROTOCOLS
